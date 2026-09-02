@@ -3,4 +3,6 @@
 #   ansible-galaxy install -r requirements.yml
 collections:
   - name: ansible.posix
+  # Used by the postgres role to manage the application database and its role.
+  - name: community.postgresql
 roles: []

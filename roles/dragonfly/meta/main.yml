@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: dragonfly
+  author: nico
+  description: Dragonfly, the Redis replacement, as a systemd service from the upstream release tarball.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

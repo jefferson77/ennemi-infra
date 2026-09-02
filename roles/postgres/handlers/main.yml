@@ -1,0 +1,22 @@
+---
+# A restart, not a reload: listen_addresses and port only take effect at
+# startup, and this role has no way to know which of the settings it just
+# wrote need which.
+#
+# The instance unit starts with `ExecStart=-`, so systemd reports success even
+# when the server fails to come up. That is why the role ends with a query
+# against the running cluster rather than trusting this task.
+- name: Restart PostgreSQL
+  ansible.builtin.systemd_service:
+    name: "{{ postgres_service }}"
+    state: restarted
+  become: true
+
+# pg_hba.conf is re-read on a reload; unlike the settings above, it needs no
+# restart. Defined after the restart handler, so a run that changed both does
+# the restart first and this becomes a no-op rather than the other way round.
+- name: Reload PostgreSQL
+  ansible.builtin.systemd_service:
+    name: "{{ postgres_service }}"
+    state: reloaded
+  become: true

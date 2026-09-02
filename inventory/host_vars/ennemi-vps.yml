@@ -1,6 +1,6 @@
 ---
-# Login account on the VPS. The key, port and ssh options are shared with every
-# other host and live in group_vars/all.yml.
+# Login account on the VPS. The key, port and ssh options are shared with the
+# other production host and live in group_vars/prod.yml.
 ansible_user: ubuntu
 
 # nginx: nothing real is served here yet, so the VPS gets a placeholder default

@@ -1,34 +1,48 @@
 # ennemi — infrastructure
 
-Ansible repository managing the two hosts of the **ennemi** project:
+Ansible repository managing the three hosts of the **ennemi** project:
 
-| Host          | Group   | Role in the project      | Connection            |
-|---------------|---------|--------------------------|-----------------------|
-| `ennemi-brain`| `metal` | this physical machine    | `local` (no SSH)      |
-| `ennemi-vps`  | `vps`   | external VPS             | SSH                   |
+| Host          | Group  | Role in the project           | Connection            |
+|---------------|--------|-------------------------------|-----------------------|
+| `ennemi-dev`  | `dev`  | development + deploy machine  | `local` (no SSH)      |
+| `ennemi-brain`| `prod` | production, physical machine  | SSH (tailscale IP)    |
+| `ennemi-vps`  | `prod` | production, external VPS      | SSH (tailscale IP)    |
 
-Both run Ubuntu 26.04 LTS (resolute).
+All run Ubuntu 26.04 LTS (resolute).
+
+`ennemi-dev` is the controller: it runs the playbooks and manages itself over a
+local connection. The two production hosts are reached by their tailscale IP, so
+a production deploy needs this machine on the tailnet.
 
 ## Layout
 
 ```
 deploy                   # wrapper: ./deploy [host|group] [role] [ansible flags]
+.env                     # credentials — git-ignored, never committed
+.env.example             # the committed template for it
 ansible.cfg              # defaults: inventory path, roles path, SSH tuning
 inventory/hosts.yml      # the single inventory
-inventory/group_vars/    # per-group variables (all / metal / vps)
+inventory/group_vars/    # per-group variables (all / prod)
+inventory/host_vars/     # per-host variables (one file per host)
 playbooks/site.yml       # entry point
 roles/common/            # baseline shared by every host
 roles/docker/            # Docker Engine + compose plugin
 roles/tailscale/         # tailscale, kept at the latest release
 roles/nginx/             # nginx + the per-host site configs
+roles/dragonfly/         # Dragonfly (redis replacement), as a systemd service
+roles/postgres/          # PostgreSQL 18, from the Ubuntu archive
+roles/dev/               # development-machine toolchain (ennemi-dev only)
 ```
 
 ## Before the first run
 
-1. Set the VPS address and login in `inventory/hosts.yml` and
-   `inventory/group_vars/vps.yml` (both are marked `TODO`).
+1. Install Ansible on the controller, if it is not there yet:
+   `sudo apt install ansible` (or `pipx install ansible-core`).
 2. Install the collections: `ansible-galaxy install -r requirements.yml`
-3. Check connectivity: `ansible all -m ping`
+3. Create the credentials file: `cp .env.example .env`, then fill it in.
+   Nothing runs without it — see [Credentials](#credentials).
+3. Join the tailnet, so the production hosts are reachable: `tailscale status`
+4. Check connectivity: `ansible all -m ping`
 
 ## Usage
 
@@ -38,16 +52,22 @@ Anything starting with `-` is passed straight through to `ansible-playbook`.
 
 ```bash
 ./deploy                       # everything, every host
-./deploy vps                   # only the vps group
+./deploy prod                  # only the two production hosts
+./deploy dev                   # only this machine
 ./deploy ennemi-brain          # only that host
 ./deploy common                # only the common role
 ./deploy docker                # only the docker role
 ./deploy tailscale             # only the tailscale role
 ./deploy nginx                 # only the nginx role
-./deploy vps common            # both restrictions at once
+./deploy dragonfly             # only the dragonfly role
+./deploy cache                 # every role, on the hosts that run the cache
+./deploy postgres              # only the postgres role
+./deploy database              # every role, on the hosts that run a database
+./deploy --tags=dev            # only the dev role (see the note below)
+./deploy prod common           # both restrictions at once
 ./deploy --check --diff        # dry run
 ./deploy --tags user           # only part of a role (see below)
-./deploy vps -e common_apt_autoclean=false
+./deploy prod -e common_apt_autoclean=false
 ./deploy --help                # usage + the list of known hosts/groups/roles
 ```
 
@@ -58,14 +78,56 @@ Or call `ansible-playbook` directly:
 ansible-playbook playbooks/site.yml --ask-become-pass
 
 # one group only
-ansible-playbook playbooks/site.yml --limit vps
-ansible-playbook playbooks/site.yml --limit metal --ask-become-pass
+ansible-playbook playbooks/site.yml --limit prod
+ansible-playbook playbooks/site.yml --limit dev --ask-become-pass
 
 # dry run
 ansible-playbook playbooks/site.yml --check --diff
 ```
 
 `--ask-become-pass` is only needed for accounts whose sudo asks for a password.
+
+`dev` names both a group and a role, and the wrapper reads a bare `dev` as the
+group — `./deploy dev` stays "every role on this machine". Select the role
+itself with `--tags=dev` (a flag and its value have to be joined with `=`, the
+wrapper would otherwise read the value as a target of its own).
+
+## Credentials
+
+Nothing secret is in this repository. Credentials live in `.env` at the root of
+the checkout, which is git-ignored; `.env.example` is the committed template:
+
+```bash
+cp .env.example .env      # then fill in the real values
+```
+
+| Key | Used by |
+|-----|---------|
+| `POSTGRES_APP_PASSWORD` | the `ennemi` PostgreSQL role that owns the `ennemi` database |
+
+`inventory/group_vars/all.yml` is the only place that reads the file, with an
+`ini` lookup in `properties` mode, and the path is derived from the inventory
+rather than the working directory so a run behaves the same from anywhere. The
+file is read **directly, not through the shell**, so `./deploy` and a bare
+`ansible-playbook` behave identically and nothing has to be exported first.
+
+Two things about the format: values are **not quoted** — quotes would be read
+as part of the password — and `#` only starts a comment at the beginning of a
+line, so it is safe inside a value.
+
+A missing file or key is an empty value rather than an error, and the roles
+assert on it, so a fresh clone fails in a second with something you can act on
+instead of a traceback:
+
+```
+TASK [postgres : Fail early if the application password is not set] ****
+fatal: [ennemi-dev]: FAILED! => "postgres_app_password is empty. Credentials
+are read from /home/ennemi/ennemi-metal/.env, which is not in git: copy
+.env.example to .env and set POSTGRES_APP_PASSWORD in it."
+```
+
+Rotating a password is editing `.env` and re-running the role: the change is
+applied to the cluster and reported as `changed`.
 
 ## The `common` role
 
@@ -106,12 +168,12 @@ ok: [ennemi-brain] => (item=ennemi-vps) => {
 ```
 
 **The role never reboots anything.** A reboot cuts the SSH session it was
-ordered from, and on `ennemi-brain` it would kill the controller running the
+ordered from, and on `ennemi-dev` it would kill the controller running the
 playbook — so rebooting stays a manual step:
 
 ```bash
 ansible ennemi-vps -b -m reboot     # over SSH
-sudo reboot                         # on ennemi-brain, from a shell
+sudo reboot                         # on ennemi-dev, from a shell
 ```
 
 Variables: see `roles/common/defaults/main.yml`.
@@ -171,7 +233,7 @@ Variables: see `roles/tailscale/defaults/main.yml`.
 ## The `nginx` role
 
 Installs nginx and deploys a per-host set of site configurations. Which sites a
-host gets is declared in `inventory/group_vars/`, and the files themselves live
+host gets is declared in `inventory/host_vars/`, and the files themselves live
 in the role:
 
 ```
@@ -179,10 +241,11 @@ roles/nginx/files/sites/     -> /etc/nginx/sites-available/ (then symlinked)
 roles/nginx/files/conf.d/    -> /etc/nginx/conf.d/
 ```
 
-| Group   | `nginx_sites`              | `nginx_conf_d`      |
-|---------|----------------------------|---------------------|
-| `metal` | `ennemi.net`, `dev.ennemi.net` | `stub_status.conf` |
-| `vps`   | `vps-placeholder`          | —                   |
+| Host           | `nginx_sites`                   | `nginx_conf_d`     |
+|----------------|---------------------------------|--------------------|
+| `ennemi-brain` | `ennemi.net`, `dev.ennemi.net` | `stub_status.conf` |
+| `ennemi-vps`   | `vps-placeholder`              | —                  |
+| `ennemi-dev`   | — (stock default site removed)  | —                  |
 
 `ennemi-brain`'s two files were copied off the running host byte for byte, so
 applying the role there reports `changed=0` and never reloads it. The VPS gets
@@ -205,3 +268,246 @@ fires, so a broken config fails the play instead of reaching a live server.
 Changes reload nginx rather than restarting it.
 
 Variables: see `roles/nginx/defaults/main.yml`.
+
+## The `dragonfly` role
+
+[Dragonfly](https://dragonflydb.io) is a drop-in Redis replacement: the same
+wire protocol and commands, one multi-threaded process instead of one core.
+
+It was installed on `ennemi-brain` by hand — a release binary in
+`/opt/dragonfly`, a unit written into `/etc/systemd/system` — and the role
+**describes that installation rather than replacing it**, so it can reproduce
+the same service on `ennemi-dev`. Both hosts are in the `cache` group and get
+identical settings:
+
+| | |
+|---|---|
+| Binary | `/opt/dragonfly/dragonfly`, `root:root 0755`, from the upstream release tarball |
+| Unit | `/etc/systemd/system/dragonfly.service` |
+| Runs as | `ennemi:ennemi` — the admin account, not a system user |
+| Data | `/var/lib/dragonfly`, holding the `dump-*.dfs` snapshots |
+| Listens | `0.0.0.0:6379` |
+| Snapshots | every six hours (`--snapshot_cron "0 */6 * * *"`) |
+
+```bash
+./deploy dragonfly                   # both hosts
+./deploy ennemi-dev dragonfly        # just this machine
+systemctl status dragonfly
+redis-cli -p 6379 ping
+```
+
+Every flag is a variable and the defaults are `ennemi-brain`'s live values, so
+`roles/dragonfly/defaults/main.yml` doubles as the record of what production
+runs. The unit template renders **byte for byte** what that host already has —
+it carries no "managed by ansible" header for exactly that reason, since a
+header would mean restarting production to write a comment.
+
+### Versions
+
+There is no apt repository for Dragonfly, so the role installs the binary from
+the release tarball. `dragonfly_version` is empty by default, which means **the
+newest upstream release**: it is resolved once per run from the
+`releases/latest` redirect (not the GitHub API, which rate-limits anonymous
+callers), then applied to every host of the group so one deploy cannot leave
+the two on different versions.
+
+**Upstream therefore decides when the service restarts.** A release lands, the
+next deploy installs it and the datastore restarts, reloading from its
+snapshot. Set `dragonfly_version: "1.40.1"` — in the defaults, or in
+`inventory/host_vars/` for one host — to freeze it.
+
+A host already running the target version is left completely alone: no
+download, no re-extraction, no ownership or mode "fixes" over an installation
+that is already correct. When an upgrade does happen, the new binary is
+unpacked to `/var/tmp` and **run once before it is installed**, the way
+`nginx -t` runs before nginx is reloaded, so a binary that cannot execute on
+the host fails the play while the old one is still serving. It is then swapped
+in by rename — legal while the old one is executing — and the service is
+restarted.
+
+The run ends with a real protocol round-trip rather than `systemctl is-active`,
+because after an upgrade only a query proves the new binary came back:
+
+```
+TASK [dragonfly : Report the running Dragonfly] ********************
+ok: [ennemi-brain] => {
+    "msg": "ennemi-brain: dragonfly_version:df-v1.40.1 answering on 127.0.0.1:6379."
+}
+```
+
+### Two things to know
+
+- **The datastore is reachable on every interface with no password.** That is
+  how `ennemi-brain` was set up and what `ennemi-dev` now mirrors — a deliberate
+  choice, recorded here rather than left as a surprise. Restricting a host to
+  the loopback is one line in `inventory/host_vars/`:
+  `dragonfly_bind: 127.0.0.1`.
+- **Upstream publishes no checksum** beside the tarball, so the integrity of a
+  download rests on TLS to github.com alone.
+
+The role does **not** manage authentication, TLS, or replication; none of them
+are configured on `ennemi-brain` today.
+
+Variables: see `roles/dragonfly/defaults/main.yml`.
+
+## The `postgres` role
+
+PostgreSQL 18 on `ennemi-brain` (production) and `ennemi-dev` (development),
+through the `database` group — the VPS has no database of its own. Both hosts
+get the same cluster; what differs between them belongs in
+`inventory/host_vars/`.
+
+The packages come from **Ubuntu's own archive**, not from `apt.postgresql.org`:
+26.04 ships `postgresql-18` in `main` (18.6, with security updates), so the
+`common` role's `dist-upgrade` already keeps it current. That is the difference
+with the `docker` and `tailscale` roles, which need a vendor repository because
+the distribution ships nothing usable.
+
+```bash
+./deploy postgres                    # the role, on both database hosts
+./deploy ennemi-dev postgres         # just this machine
+sudo -u postgres psql                # peer auth over the unix socket
+```
+
+Installing the package creates the `main` cluster, in
+`/var/lib/postgresql/18/main` with its configuration in
+`/etc/postgresql/18/main`. The role recreates it with `pg_createcluster` if it
+is ever missing, but normally never has to.
+
+**`postgresql.conf` is the distribution's.** `pg_createcluster` generates it
+and ends it with `include_dir = 'conf.d'`, so the role writes only the settings
+this project owns, as `conf.d/10-ennemi.conf`. Being included last, they win
+over everything above them:
+
+```yaml
+postgres_settings:
+  listen_addresses: localhost
+  port: 5432
+```
+
+Per-host tuning (`shared_buffers`, `work_mem`, `max_connections`, …) goes into
+that same dict in `inventory/host_vars/`; everything left out keeps its
+packaged default.
+
+### Reaching it from another machine
+
+Both hosts accept connections from anywhere. That takes two settings, and
+missing either one is the usual reason a remote client cannot connect:
+
+```yaml
+postgres_settings:
+  listen_addresses: 0.0.0.0     # what the server binds
+
+postgres_hba_entries:           # who is then allowed to authenticate
+  - contype: host
+    databases: all
+    users: all
+    address: 0.0.0.0/0
+    method: scram-sha-256
+```
+
+`pg_hba.conf` is **not** templated — the rules in `postgres_hba_entries` are
+edited into the packaged file in place, so the distribution's own rules and
+comments stay exactly as they were, and that list is the only part of the file
+the role owns. Rules are appended rather than re-sorted: pg_hba is evaluated
+top-down and the packaged rules are already the more specific ones, so
+appending is both the smallest diff and the right order. A change there
+reloads the cluster; a change to `listen_addresses` restarts it.
+
+`0.0.0.0` is IPv4 only. Use `*` and add a `::/0` rule to serve IPv6 too.
+
+> **This is an open door with a password on it.** Any host that can route to
+> `ennemi-brain` may try to authenticate, and neither host runs a firewall, so
+> the strength of `POSTGRES_APP_PASSWORD` is the whole of the defence. If you
+> want the reach without the exposure, one line narrows it to the tailnet:
+> `address: 100.64.0.0/10`.
+
+A configuration change restarts the cluster, since `listen_addresses` and
+`port` only take effect at startup. `postgres -C` parses the new configuration
+first, the way `nginx -t` does, so a typo fails the play before the server is
+stopped. The run then ends by querying the cluster it leaves behind:
+
+```
+TASK [postgres : Report the running cluster] ***********************
+ok: [ennemi-brain] => {
+    "msg": "ennemi-brain: PostgreSQL 18.6 (Ubuntu 18.6-0ubuntu0.26.04.1) ... on localhost:5432."
+}
+```
+
+That last query is not decoration: the packaged `postgresql@18-main.service`
+starts with `ExecStart=-`, so systemd reports success even when the server
+failed to come up. Only a real connection proves the cluster is back.
+
+### The application database
+
+The role creates the database the application connects to, and the account it
+connects as:
+
+```yaml
+postgres_app_database: ennemi
+postgres_app_user: ennemi
+postgres_app_password: ""      # from POSTGRES_APP_PASSWORD in .env
+```
+
+The account **owns** the database, which is the whole of "full access": an
+owner needs no `GRANT`, and since PostgreSQL 15 the `public` schema follows the
+database owner rather than being writable by everyone, so it can create tables
+without a further grant. Encoding and locale are inherited from `template1`
+(UTF8, `en_US.UTF-8`) rather than restated, which removes a way for the two to
+disagree.
+
+Creating them is not the same as proving they work, so the role then logs in
+**the way the application will** — over TCP, with the password, through
+`pg_hba.conf`'s `scram-sha-256` rule:
+
+```
+TASK [postgres : Report the application database] ******************
+ok: [ennemi-dev] => {
+    "msg": "ennemi-dev: application login ennemi@ennemi works over 127.0.0.1:5432."
+}
+```
+
+The password is **not** in this repository: it comes from
+`POSTGRES_APP_PASSWORD` in `.env`, which is git-ignored — see
+[Credentials](#credentials). Changing it there and re-running the role rotates
+it on the cluster.
+
+These tasks need `python3-psycopg2` on the host, which the role installs. A
+`--check` run against a host that does not have it yet cannot reach the cluster
+— the install was only simulated — so the role says so and skips them instead
+of failing the dry run.
+
+The role deliberately does **not** manage:
+
+- **the rest of `pg_hba.conf`.** The packaged rules — peer on the unix socket,
+  `scram-sha-256` from localhost — are left alone; only `postgres_hba_entries`
+  is managed.
+- **firewalling.** Neither host runs one today, and whether port 5432 is
+  reachable from outside the network is a matter for the router, not ansible.
+- **schema and migrations** inside the application database — those belong to
+  the application, not to the host.
+- **backups.** `pg_dump@.timer` ships with the packages, unused.
+
+Variables: see `roles/postgres/defaults/main.yml`.
+
+## The `dev` role
+
+The one role that is not applied everywhere: `playbooks/site.yml` runs it in a
+second play scoped to the `dev` group, so it only ever touches `ennemi-dev`.
+
+It installs the tools that belong on the development and deploy machine but
+have no place on a production host — currently `make`. Everything else that
+machine needs comes from `common` like on any other host, so this list stays
+short:
+
+```yaml
+dev_packages:
+  - make
+```
+
+Add to that list rather than installing by hand, so a rebuilt controller comes
+back with the same toolchain. The apt cache was already refreshed by `common`
+earlier in the run, so the install reuses it instead of hitting the network
+again.
+
+Variables: see `roles/dev/defaults/main.yml`.

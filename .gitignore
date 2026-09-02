@@ -4,6 +4,10 @@ collections/
 .vault_pass
 *.vault
 
+# Credentials. .env holds the real values and never goes in; .env.example is
+# the committed template and must never hold a real one.
+.env
+
 # Local overrides
 inventory/host_vars/*.local.yml
 inventory/group_vars/*.local.yml

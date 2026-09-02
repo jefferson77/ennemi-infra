@@ -101,7 +101,7 @@
   tags: [packages]
 
 # This role never reboots anything: a reboot cuts the SSH session it was
-# ordered from, and on ennemi-brain it would kill the controller running the
+# ordered from, and on ennemi-dev it would kill the controller running the
 # playbook. The hosts are listed here instead, to be rebooted by hand.
 - name: List the hosts that need a manual reboot
   ansible.builtin.debug:

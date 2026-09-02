@@ -20,3 +20,29 @@
       tags: [adguard]
     - role: nginx
       tags: [nginx]
+
+# Services that belong to some of the hosts only, each scoped to the group that
+# names it. After the baseline play, which is where docker was installed.
+- name: Apply the cache services
+  hosts: cache
+  gather_facts: true
+  roles:
+    - role: dragonfly
+      tags: [dragonfly]
+
+- name: Apply the database services
+  hosts: database
+  gather_facts: true
+  roles:
+    - role: postgres
+      tags: [postgres]
+
+# The development machine gets one extra role. A separate play scoped to the
+# "dev" group, rather than a `when:` on the role, so the role never has to know
+# which host it is running on and `./deploy dev` reads the same as the rest.
+- name: Apply the development toolchain
+  hosts: dev
+  gather_facts: true
+  roles:
+    - role: dev
+      tags: [dev]

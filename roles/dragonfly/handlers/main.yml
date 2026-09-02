@@ -1,0 +1,9 @@
+---
+# The unit is reloaded by the enable task rather than here: a brand-new unit
+# has to be known to systemd before it can be enabled, which happens earlier in
+# the run than any handler.
+- name: Restart Dragonfly
+  ansible.builtin.systemd_service:
+    name: "{{ dragonfly_service }}"
+    state: restarted
+  become: true

@@ -4,12 +4,12 @@
 #          or restricted to a single role.
 #
 #   ./deploy                      everything, every host
-#   ./deploy vps                  only the hosts of the group "vps"
+#   ./deploy prod                 only the hosts of the group "prod"
 #   ./deploy ennemi-brain         only that host
 #   ./deploy common               only the role "common", every host
-#   ./deploy vps common           combine the two (any order)
+#   ./deploy prod common          combine the two (any order)
 #   ./deploy --check --diff       dry run (extra flags go to ansible-playbook)
-#   ./deploy vps -e common_apt_autoclean=false
+#   ./deploy prod -e common_apt_autoclean=false
 #
 set -euo pipefail
 
@@ -25,12 +25,15 @@ deploy — run playbooks/site.yml, optionally against a single host/group
          or restricted to a single role.
 
   ./deploy                      everything, every host
-  ./deploy vps                  only the hosts of the group "vps"
+  ./deploy prod                 only the hosts of the group "prod"
   ./deploy ennemi-brain         only that host
   ./deploy common               only the role "common", every host
-  ./deploy vps common           combine the two (any order)
+  ./deploy prod common          combine the two (any order)
   ./deploy --check --diff       dry run (extra flags go to ansible-playbook)
-  ./deploy vps -e common_apt_autoclean=false
+  ./deploy prod -e common_apt_autoclean=false
+
+A name that is both a host/group and a role reads as the host/group ("dev");
+use --tags for the role of that name.
 USAGE
     printf '\nKnown targets:\n'
     printf '  hosts/groups : %s\n' "$(inventory_names | tr '\n' ' ')"
@@ -69,13 +72,16 @@ for arg in "$@"; do
         -*)        passthrough+=("$arg"); continue ;;
     esac
 
-    # A bare word is a role, a host or a group — resolve it against the repo.
-    if contains "$arg" "$(role_names)"; then
-        [[ -n $tags ]] && die "only one role at a time (already selecting '$tags')."
-        tags="$arg"
-    elif contains "$arg" "$(inventory_names)"; then
+    # A bare word is a host, a group or a role — resolve it against the repo.
+    # The inventory wins a tie: "dev" names both a group and a role, and
+    # restricting the run to that machine is the more useful of the two
+    # readings. Select such a role explicitly with --tags (./deploy --tags dev).
+    if contains "$arg" "$(inventory_names)"; then
         [[ -n $limit ]] && die "only one host or group at a time (already limiting to '$limit')."
         limit="$arg"
+    elif contains "$arg" "$(role_names)"; then
+        [[ -n $tags ]] && die "only one role at a time (already selecting '$tags')."
+        tags="$arg"
     else
         printf 'deploy: unknown target %s\n\n' "$arg" >&2
         usage >&2

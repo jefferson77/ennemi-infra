@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: postgres
+  author: nico
+  description: PostgreSQL 18 from the Ubuntu archive, with the cluster settings this project owns.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

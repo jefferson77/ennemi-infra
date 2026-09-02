@@ -1,0 +1,47 @@
+[Unit]
+Description=Dragonfly In-Memory Datastore
+Documentation=https://www.dragonflydb.io/docs
+After=network.target
+
+[Service]
+Type=simple
+User={{ dragonfly_user }}
+Group={{ dragonfly_group }}
+
+# Dragonfly command with configuration flags
+ExecStart={{ dragonfly_binary }} \
+    --bind {{ dragonfly_bind }} \
+    --port {{ dragonfly_port }} \
+    --proactor_threads {{ dragonfly_proactor_threads }} \
+    --dir {{ dragonfly_data_dir }} \
+    --dbfilename {{ dragonfly_dbfilename }} \
+    --snapshot_cron "{{ dragonfly_snapshot_cron }}" \
+    --logtostderr \
+{% for flag in dragonfly_extra_flags %}
+    {{ flag }} \
+{% endfor %}
+    
+
+# Service management
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=32768
+
+# Logging to systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dragonfly
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ dragonfly_data_dir }}
+
+[Install]
+WantedBy=multi-user.target

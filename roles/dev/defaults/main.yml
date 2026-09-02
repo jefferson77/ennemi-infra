@@ -1,0 +1,7 @@
+---
+# Tools that belong on the development machine only, on top of the baseline
+# every host gets from the common role. Add to this list rather than
+# installing by hand, so a rebuilt controller comes back with the same
+# toolchain.
+dev_packages:
+  - make

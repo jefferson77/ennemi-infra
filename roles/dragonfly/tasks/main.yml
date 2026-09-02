@@ -1,0 +1,207 @@
+---
+# This role describes the Dragonfly installation that already exists on
+# ennemi-brain — binary in /opt/dragonfly, unit in /etc/systemd/system, data
+# owned by the admin account — and reproduces it on any other host of the cache
+# group. On a host that already matches, every task below is a no-op.
+
+# GitHub answers /releases/latest with a 302 to the tag. That redirect is used
+# rather than the API because api.github.com is rate-limited per IP and refuses
+# anonymous callers after a handful of requests.
+#
+# Resolved once, on the controller, and shared with every host of the play, so
+# a single deploy cannot install two different versions.
+- name: Resolve the latest Dragonfly release
+  ansible.builtin.uri:
+    url: "{{ dragonfly_releases_url }}/latest"
+    method: GET
+    follow_redirects: none
+    status_code: [301, 302]
+  register: dragonfly_latest_release
+  delegate_to: localhost
+  run_once: true
+  check_mode: false   # read-only, must run so --check knows what it compares to
+  when: dragonfly_version | length == 0
+
+# Per host, not run_once: a host may pin its own dragonfly_version in host_vars
+# while the others follow the release resolved above.
+- name: Record the version to install
+  ansible.builtin.set_fact:
+    dragonfly_target_version: >-
+      {{ dragonfly_version if dragonfly_version | length > 0
+         else dragonfly_latest_release.location | basename | regex_replace('^v', '') }}
+
+- name: Look for an installed Dragonfly
+  ansible.builtin.stat:
+    path: "{{ dragonfly_binary }}"
+  register: dragonfly_binary_stat
+  become: true
+
+# `dragonfly --version` prints an ANSI-coloured "dragonfly v1.23.1-<commit>";
+# the regexp picks the version out of it whichever stream it lands on.
+- name: Read the installed version
+  ansible.builtin.command: "{{ dragonfly_binary }} --version"
+  register: dragonfly_version_output
+  changed_when: false
+  check_mode: false   # read-only, must run so --check knows what it compares to
+  when: dragonfly_binary_stat.stat.exists
+  become: true
+
+- name: Record the installed version
+  ansible.builtin.set_fact:
+    dragonfly_installed_version: >-
+      {{ ((dragonfly_version_output.stdout | default('')) ~ (dragonfly_version_output.stderr | default('')))
+         | regex_search('v([0-9]+\.[0-9]+\.[0-9]+)') | default('', true) | regex_replace('^v', '') }}
+
+- name: Report the Dragonfly install this run would perform
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: would install Dragonfly
+      {{ dragonfly_target_version }}
+      (currently {{ dragonfly_installed_version | default('', true) | ternary(dragonfly_installed_version, 'not installed') }}).
+  when:
+    - ansible_check_mode
+    - dragonfly_installed_version != dragonfly_target_version
+
+# Skipped entirely on a host already running the target version: no download,
+# no re-extraction, no ownership or mode "fixes" over an installation that is
+# already correct. Under --check the tasks are replaced by the report above,
+# since nothing has been downloaded for them to work on.
+- name: Install Dragonfly {{ dragonfly_target_version }}
+  when:
+    - dragonfly_installed_version != dragonfly_target_version
+    - not ansible_check_mode
+  become: true
+  block:
+
+    - name: Create the installation directory
+      ansible.builtin.file:
+        path: "{{ dragonfly_install_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Create a staging directory for the release
+      ansible.builtin.file:
+        path: "{{ dragonfly_staging_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    # Upstream publishes no checksum alongside the tarball, so the only
+    # guarantee on what lands here is TLS to github.com.
+    - name: Download the release tarball
+      ansible.builtin.get_url:
+        url: "{{ dragonfly_releases_url }}/download/v{{ dragonfly_target_version }}/dragonfly-{{ dragonfly_arch }}.tar.gz"
+        dest: "{{ dragonfly_staging_dir }}/dragonfly.tar.gz"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Unpack it
+      ansible.builtin.unarchive:
+        src: "{{ dragonfly_staging_dir }}/dragonfly.tar.gz"
+        dest: "{{ dragonfly_staging_dir }}"
+        remote_src: true
+
+    # The equivalent of `nginx -t`: a binary that cannot run on this host fails
+    # the play here, while the old one is still serving.
+    - name: Check that the new binary runs on this host
+      ansible.builtin.command: "{{ dragonfly_staging_dir }}/dragonfly-{{ dragonfly_arch }} --version"
+      changed_when: false
+
+    # copy replaces the file by renaming over it, which is legal while the old
+    # binary is executing — the running process keeps the inode it started
+    # from, and the restart below picks up the new one.
+    - name: Install the binary
+      ansible.builtin.copy:
+        src: "{{ dragonfly_staging_dir }}/dragonfly-{{ dragonfly_arch }}"
+        dest: "{{ dragonfly_binary }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Restart Dragonfly
+
+    # 0755 to match what is already beside the binary on ennemi-brain, rather
+    # than the 0644 the tarball carries.
+    - name: Install the licence beside it
+      ansible.builtin.copy:
+        src: "{{ dragonfly_staging_dir }}/LICENSE.md"
+        dest: "{{ dragonfly_install_dir }}/LICENSE.md"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ dragonfly_staging_dir }}"
+        state: absent
+
+- name: Create the data directory
+  ansible.builtin.file:
+    path: "{{ dragonfly_data_dir }}"
+    state: directory
+    owner: "{{ dragonfly_user }}"
+    group: "{{ dragonfly_group }}"
+    mode: "0755"
+  become: true
+
+# Deliberately carries no "managed by ansible" header: the template has to
+# render byte for byte what ennemi-brain already has, or a deploy would restart
+# production to write a comment.
+- name: Deploy the service unit
+  ansible.builtin.template:
+    src: dragonfly.service.j2
+    dest: "{{ dragonfly_unit_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  become: true
+  notify: Restart Dragonfly
+
+# daemon_reload here rather than in a handler: on a host seeing the unit for
+# the first time, systemd has to know about it before it can be enabled, and
+# handlers only run at the end. It is idempotent and never reported as a change.
+- name: Enable and start Dragonfly
+  ansible.builtin.systemd_service:
+    name: "{{ dragonfly_service }}"
+    enabled: "{{ dragonfly_service_enabled | bool }}"
+    state: "{{ dragonfly_service_state }}"
+    daemon_reload: true
+  become: true
+
+# Before the check below, so it queries the server the run leaves behind rather
+# than the one it found.
+- name: Apply any pending restart
+  ansible.builtin.meta: flush_handlers
+
+# A real protocol round-trip rather than `systemctl is-active`: it proves the
+# port is open and, after an upgrade, that the new binary came back and reloaded
+# its snapshot. Retried, since a restart takes a moment.
+- name: Check that Dragonfly answers on the redis port
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      exec 3<>/dev/tcp/{{ dragonfly_check_host }}/{{ dragonfly_port }}
+      printf 'INFO server\r\nPING\r\n' >&3
+      timeout 5 sed -n '/^dragonfly_version:/p; /^+PONG/q' <&3 | tr -d '\r'
+  register: dragonfly_ping
+  changed_when: false
+  until: dragonfly_ping.rc == 0
+  retries: 5
+  delay: 2
+  become: true
+  when: not ansible_check_mode
+
+- name: Report the running Dragonfly
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ dragonfly_ping.stdout | default('dragonfly', true) | trim }}
+      answering on {{ dragonfly_check_host }}:{{ dragonfly_port }}.
+  when: dragonfly_ping is not skipped

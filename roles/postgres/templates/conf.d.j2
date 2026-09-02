@@ -1,0 +1,11 @@
+# Managed by ansible (roles/postgres). Changes here are overwritten.
+#
+# postgresql.conf belongs to the distribution; this file is included from it
+# and is read last, so what is set here overrides what is set there.
+#
+# Add settings to postgres_settings — in roles/postgres/defaults/main.yml for
+# every host, in inventory/host_vars/ for one of them.
+{% for key, value in postgres_settings | dictsort %}
+{% set rendered = value | ternary('on', 'off') if value is boolean else value | string %}
+{{ key }} = '{{ rendered | replace("'", "''") }}'
+{% endfor %}

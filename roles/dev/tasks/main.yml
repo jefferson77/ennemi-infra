@@ -1,0 +1,24 @@
+---
+- name: Fail early on a non-apt distribution
+  ansible.builtin.assert:
+    that: ansible_facts['pkg_mgr'] in ['apt', 'apt_rpm']
+    fail_msg: >-
+      The dev role only manages apt-based hosts, but
+      {{ inventory_hostname }} reports pkg_mgr={{ ansible_facts['pkg_mgr'] }}.
+    quiet: true
+
+# The cache is refreshed by the common role earlier in the run; cache_valid_time
+# keeps this from hitting the network again when it is already fresh.
+- name: Install the development packages
+  ansible.builtin.apt:
+    name: "{{ dev_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: "{{ common_apt_cache_valid_time | default(3600) }}"
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Report the installed development packages
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: {{ dev_packages | join(', ') }}"

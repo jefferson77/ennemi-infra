@@ -1,0 +1,62 @@
+---
+# Dragonfly — a drop-in Redis replacement (same wire protocol and commands,
+# one multi-threaded process instead of one core).
+#
+# It runs as a plain systemd service, not a container: that is how it was set
+# up by hand on ennemi-brain, and this role describes that installation rather
+# than replacing it. The values below are the ones live on that host, so these
+# defaults double as the record of what production runs.
+#
+# There is no apt repository for Dragonfly; upstream publishes a tarball per
+# release, and the binary in it is what ends up in {{ dragonfly_install_dir }}.
+
+# Empty means "whatever upstream has released most recently", resolved once per
+# run and applied to every host of the group, so one deploy can never leave the
+# two hosts on different versions.
+#
+# WARNING: with this empty, upstream decides when the service restarts — a
+# release lands, and the next deploy upgrades and restarts it. Set this to a
+# version string ("1.40.1"), here or in inventory/host_vars/, to freeze a host.
+dragonfly_version: ""
+
+dragonfly_releases_url: https://github.com/dragonflydb/dragonfly/releases
+
+# Upstream ships dragonfly-x86_64.tar.gz and dragonfly-aarch64.tar.gz; each
+# holds the binary under that same name, plus LICENSE.md.
+dragonfly_arch: "{{ 'aarch64' if ansible_facts['architecture'] == 'aarch64' else 'x86_64' }}"
+
+dragonfly_install_dir: /opt/dragonfly
+dragonfly_binary: "{{ dragonfly_install_dir }}/dragonfly"
+dragonfly_data_dir: /var/lib/dragonfly
+dragonfly_staging_dir: "/var/tmp/dragonfly-{{ dragonfly_target_version | default('unset') }}"
+
+# The service runs as the admin account rather than a system user, which is how
+# ennemi-brain was set up; the data directory belongs to it.
+dragonfly_user: "{{ common_user | default('ennemi') }}"
+dragonfly_group: "{{ dragonfly_user }}"
+
+dragonfly_service: dragonfly
+dragonfly_unit_file: "/etc/systemd/system/{{ dragonfly_service }}.service"
+dragonfly_service_enabled: true
+dragonfly_service_state: started
+
+# Command line, one variable per flag. These are ennemi-brain's live values.
+#
+# WARNING: 0.0.0.0 with no --requirepass means an unauthenticated datastore on
+# every interface of the host. That is the existing setup, kept deliberately so
+# the role does not change production. `dragonfly_bind: 127.0.0.1` in
+# inventory/host_vars/ restricts a host to the loopback.
+dragonfly_bind: 0.0.0.0
+dragonfly_port: 6379
+dragonfly_proactor_threads: 4
+dragonfly_dbfilename: dump
+dragonfly_snapshot_cron: "0 */6 * * *"
+
+# Appended to the command line, one entry per line, in the slot the hand-written
+# unit already left empty after --logtostderr.
+dragonfly_extra_flags: []
+
+# The address the post-deploy PING connects to: 0.0.0.0 is a bind address, not
+# a destination.
+dragonfly_check_host: >-
+  {{ '127.0.0.1' if dragonfly_bind in ['0.0.0.0', '::', ''] else dragonfly_bind }}

@@ -1,0 +1,233 @@
+---
+- name: Fail early on a non-apt distribution
+  ansible.builtin.assert:
+    that: ansible_facts['pkg_mgr'] in ['apt', 'apt_rpm']
+    fail_msg: >-
+      The postgres role installs postgresql-{{ postgres_version }} from the
+      Ubuntu archive, but {{ inventory_hostname }} reports
+      pkg_mgr={{ ansible_facts['pkg_mgr'] }}.
+    quiet: true
+
+# Checked before anything is installed, so a checkout without a .env stops in
+# seconds with something actionable rather than failing later against a cluster
+# it has already changed.
+- name: Fail early if the application password is not set
+  ansible.builtin.assert:
+    that: postgres_app_password | length > 0
+    fail_msg: >-
+      postgres_app_password is empty. Credentials are read from
+      {{ ennemi_env_file }}, which is not in git: copy .env.example to .env and
+      set POSTGRES_APP_PASSWORD in it.
+    quiet: true
+
+# The cache is refreshed by the common role earlier in the run; cache_valid_time
+# keeps this from hitting the network again when it is already fresh.
+- name: Install PostgreSQL {{ postgres_version }}
+  ansible.builtin.apt:
+    name: "{{ postgres_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: "{{ common_apt_cache_valid_time | default(3600) }}"
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Look for the {{ postgres_cluster }} cluster
+  ansible.builtin.stat:
+    path: "{{ postgres_conf_dir }}/postgresql.conf"
+  register: postgres_cluster_conf
+  become: true
+
+# Installing the package creates a "main" cluster on a host that had none, so
+# this normally never runs. It is here for the host where the cluster was
+# dropped, or where createcluster.conf turns that off: without it the rest of
+# the role would have nothing to configure.
+- name: Create the {{ postgres_cluster }} cluster
+  ansible.builtin.command:
+    cmd: "pg_createcluster {{ postgres_version }} {{ postgres_cluster }} --start"
+  become: true
+  when: not postgres_cluster_conf.stat.exists
+  changed_when: true
+
+# Under --check on a host that has no PostgreSQL yet, the install above did not
+# run, so /etc/postgresql/{{ postgres_version }} does not exist and the template
+# would fail on the missing directory instead of reporting what it would do.
+- name: Configure the cluster
+  when: postgres_cluster_conf.stat.exists or not ansible_check_mode
+  block:
+
+    # Written where postgres can read it; the settings are not secret, but the
+    # directory and its files belong to the postgres user like the rest of the
+    # cluster configuration.
+    - name: Deploy the settings this project owns
+      ansible.builtin.template:
+        src: conf.d.j2
+        dest: "{{ postgres_conf_dir }}/conf.d/{{ postgres_managed_conf_name }}"
+        owner: postgres
+        group: postgres
+        mode: "0644"
+        backup: true
+      become: true
+      notify: Restart PostgreSQL
+
+    # Edits only the rules listed in postgres_hba_entries, leaving the rest of
+    # the packaged file alone. sort_rules: false so the distribution's layout
+    # and comments survive — the packaged rules are already more specific than
+    # anything added here, and pg_hba is evaluated top-down, so appending is
+    # both the smallest diff and the correct order.
+    - name: Allow the configured clients in pg_hba.conf
+      community.postgresql.postgresql_pg_hba:
+        dest: "{{ postgres_conf_dir }}/pg_hba.conf"
+        contype: "{{ item.contype | default('host') }}"
+        databases: "{{ item.databases | default('all') }}"
+        users: "{{ item.users | default('all') }}"
+        address: "{{ item.address }}"
+        method: "{{ item.method | default('scram-sha-256') }}"
+        comment: "{{ item.comment | default(omit) }}"
+        state: "{{ item.state | default('present') }}"
+        sort_rules: false
+        backup: true
+      become: true
+      loop: "{{ postgres_hba_entries }}"
+      loop_control:
+        label: "{{ item.contype | default('host') }} {{ item.address }} {{ item.method | default('scram-sha-256') }}"
+      notify: Reload PostgreSQL
+
+    # The equivalent of `nginx -t`: -C parses the whole configuration and
+    # prints one setting, so a typo fails the play here rather than at the
+    # handler, with the server already stopped.
+    - name: Check that the configuration parses
+      ansible.builtin.command:
+        cmd: >-
+          /usr/lib/postgresql/{{ postgres_version }}/bin/postgres
+          -C listen_addresses -D {{ postgres_conf_dir }}
+      become: true
+      become_user: postgres
+      changed_when: false
+
+    - name: Enable and start the cluster
+      ansible.builtin.systemd_service:
+        name: "{{ postgres_service }}"
+        enabled: "{{ postgres_service_enabled | bool }}"
+        state: "{{ postgres_service_state }}"
+      become: true
+
+    # Before the smoke test below, so it queries the server the run leaves
+    # behind rather than the one it found.
+    - name: Apply any pending restart
+      ansible.builtin.meta: flush_handlers
+
+    # The real check: the instance unit ignores a failed start, so only a query
+    # proves the cluster came back. Peer authentication over the unix socket,
+    # which is what the packaged pg_hba.conf grants the postgres user.
+    - name: Check that the cluster answers
+      ansible.builtin.command:
+        cmd: psql -tAXc "select version()"
+      become: true
+      become_user: postgres
+      changed_when: false
+      register: postgres_version_query
+
+    - name: Report the running cluster
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ postgres_version_query.stdout | default('postgresql', true) | trim }}
+          on {{ postgres_settings.listen_addresses | default('localhost') }}:{{ postgres_settings.port | default(5432) }}.
+      when: postgres_version_query is not skipped
+
+    # A --check run on a host that has no python3-psycopg2 yet cannot reach the
+    # cluster at all: the package install above was only simulated, so the
+    # modules below would have nothing to import. Probe for it and report,
+    # rather than failing a dry run over a chicken-and-egg.
+    - name: Look for the psycopg2 the database modules import
+      ansible.builtin.command: "{{ ansible_facts['python']['executable'] }} -c 'import psycopg2'"
+      register: postgres_psycopg2
+      changed_when: false
+      failed_when: false
+      check_mode: false   # read-only, must run so --check sees the real value
+
+    - name: Report the database tasks this dry run cannot check
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: python3-psycopg2 is not installed yet, so
+          this dry run cannot check the {{ postgres_app_database }} database or
+          its {{ postgres_app_user }} role. Both are handled on a real run.
+      when:
+        - ansible_check_mode
+        - postgres_psycopg2.rc != 0
+
+    # The application database and its account. Both are reached over the unix
+    # socket as the postgres superuser, which is what the packaged pg_hba.conf
+    # grants without a password.
+    - name: Provide the application database
+      when: postgres_psycopg2.rc == 0 or not ansible_check_mode
+      block:
+
+        # No task-level no_log: the module declares its own password argument
+        # as no_log, so ansible censors that one value and nothing else. Hiding
+        # the whole task would only make a failure here unreadable.
+        - name: Create the {{ postgres_app_user }} role
+          community.postgresql.postgresql_user:
+            name: "{{ postgres_app_user }}"
+            password: "{{ postgres_app_password }}"
+            role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE
+            state: present
+          become: true
+          become_user: postgres
+
+        # owner: is the whole of "full access" — an owner needs no GRANT, and
+        # it is also what gives it the public schema, which since PostgreSQL 15
+        # follows the database owner rather than being writable by everyone.
+        #
+        # Encoding and locale are inherited from template1 (UTF8, en_US.UTF-8);
+        # naming them here would only add a way for the two to disagree.
+        - name: Create the {{ postgres_app_database }} database
+          community.postgresql.postgresql_db:
+            name: "{{ postgres_app_database }}"
+            owner: "{{ postgres_app_user }}"
+            state: present
+          become: true
+          become_user: postgres
+
+        # The credentials the application will actually use, exercised the way
+        # it will use them: over TCP, with the password, through pg_hba's scram
+        # rule — none of which the two tasks above prove on their own. Run as
+        # root rather than as postgres, since it authenticates with the password
+        # like any other client.
+        #
+        # no_log here because PGPASSWORD is an environment variable, which
+        # ansible does not censor by itself; the assert below turns a failure
+        # back into something readable.
+        - name: Check that the application credentials work
+          ansible.builtin.command:
+            cmd: >-
+              psql -h {{ postgres_app_check_host }}
+              -p {{ postgres_settings.port | default(5432) }}
+              -U {{ postgres_app_user }} -d {{ postgres_app_database }}
+              -tAXc "select current_user || '@' || current_database()"
+          environment:
+            PGPASSWORD: "{{ postgres_app_password }}"
+          register: postgres_app_login
+          changed_when: false
+          failed_when: false
+          become: true
+          no_log: true
+
+        - name: Fail with a readable message if the application cannot log in
+          ansible.builtin.assert:
+            that: postgres_app_login.rc | default(1) == 0
+            fail_msg: >-
+              {{ postgres_app_user }} cannot log in to {{ postgres_app_database }}
+              on {{ postgres_app_check_host }}:{{ postgres_settings.port | default(5432) }}:
+              {{ postgres_app_login.stderr | default('no error reported') | trim }}
+            quiet: true
+          when: postgres_app_login is not skipped
+
+        - name: Report the application database
+          ansible.builtin.debug:
+            msg: >-
+              {{ inventory_hostname }}: application login
+              {{ postgres_app_login.stdout | default('', true) | trim }}
+              works over {{ postgres_app_check_host }}:{{ postgres_settings.port | default(5432) }}.
+          when: postgres_app_login is not skipped

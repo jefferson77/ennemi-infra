@@ -1,0 +1,91 @@
+---
+# PostgreSQL comes from Ubuntu's own archive, not from apt.postgresql.org:
+# 26.04 ships postgresql-18 in main (18.6 at the time of writing) with security
+# updates, so the common role's dist-upgrade already keeps it current. That is
+# the difference with the docker and tailscale roles, which need a vendor
+# repository because the distribution ships nothing usable.
+postgres_version: 18
+postgres_cluster: main
+
+postgres_packages:
+  - "postgresql-{{ postgres_version }}"
+  # Not a PostgreSQL dependency: setfacl is how ansible hands the temporary
+  # files of a task to an unprivileged account, which this role needs for the
+  # tasks it runs as postgres. Without it they fail on any host whose
+  # connection cannot pipeline — every local one, so ennemi-dev.
+  - acl
+  # psycopg2 is what the community.postgresql modules import to talk to the
+  # cluster; they run on the host, so it is needed there and not on the
+  # controller.
+  - python3-psycopg2
+
+# Debian/Ubuntu run one systemd instance per cluster; postgresql.service is
+# only a meta unit that groups them. Enabling this one is what starts the
+# cluster at boot.
+postgres_service: "postgresql@{{ postgres_version }}-{{ postgres_cluster }}"
+postgres_service_enabled: true
+postgres_service_state: started
+
+postgres_conf_dir: "/etc/postgresql/{{ postgres_version }}/{{ postgres_cluster }}"
+
+# Settings this role owns, written to conf.d/ as one file. postgresql.conf
+# itself is left to the distribution: pg_createcluster generates it and ends it
+# with `include_dir = 'conf.d'`, so this file is read last and wins.
+#
+# Everything not listed here keeps its packaged default. Per-host tuning
+# (shared_buffers, work_mem, max_connections...) belongs in
+# inventory/host_vars/, which is merged over this dict.
+#
+# listen_addresses is 0.0.0.0, so the cluster accepts connections from any
+# machine that can reach the host. That is only half of it: a client also has
+# to match a pg_hba.conf rule, which is postgres_hba_entries below. Changing
+# this setting restarts the cluster.
+#
+# 0.0.0.0 is IPv4 only, which is why the rule below is an IPv4 range; use '*'
+# here and add a ::/0 rule to serve IPv6 as well.
+#
+# The port is safe to set here — postgresql-common follows include_dir, so
+# pg_lsclusters and pg_ctlcluster see the same value the server does.
+postgres_settings:
+  listen_addresses: 0.0.0.0
+  port: 5432
+
+# Rules added to pg_hba.conf. The file is not templated: the rules are edited
+# in place, so the packaged defaults — peer on the unix socket, scram from
+# localhost — stay exactly as the distribution wrote them, and this list is the
+# only thing the role owns in that file.
+#
+# WARNING: 0.0.0.0/0 means every host that can route to this machine may try to
+# authenticate, and a password is then the only thing in the way. Narrowing
+# this to the tailnet is a one-line change:
+#
+#   address: 100.64.0.0/10
+#
+postgres_hba_entries:
+  - contype: host
+    databases: all
+    users: all
+    address: 0.0.0.0/0
+    method: scram-sha-256
+    comment: any machine, password only (roles/postgres)
+
+postgres_managed_conf_name: 10-ennemi.conf
+
+# The application database and the account the app connects with.
+#
+# The account *owns* the database, which is what "full access" means here: an
+# owner needs no further grants, and since PostgreSQL 15 the public schema
+# belongs to the database owner, so it can create tables without one either.
+postgres_app_database: ennemi
+postgres_app_user: ennemi
+
+# Deliberately empty here: the real value is POSTGRES_APP_PASSWORD in the
+# git-ignored .env file, read by inventory/group_vars/all.yml, which takes
+# precedence over this default. Empty stops the role early rather than creating
+# an account with a password nobody meant to set.
+postgres_app_password: ""
+
+# The address the credentials are tested against after they are created: the
+# loopback, because the point is to exercise password authentication over TCP,
+# not to prove the host is reachable from elsewhere.
+postgres_app_check_host: 127.0.0.1

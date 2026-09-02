@@ -1,5 +1,8 @@
 ---
-# This machine runs the playbooks itself; nothing to reach over the network.
+# Login account on the physical production machine. The key, port and ssh
+# options are shared with the other production host and live in
+# group_vars/prod.yml.
+ansible_user: ennemi
 
 # nginx: the sites this host already serves, copied into the repo as they were
 # found on disk. The certificates they reference stay on the host (letsencrypt

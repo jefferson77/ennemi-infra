@@ -2,15 +2,21 @@
 # Applies to every host in the project.
 ennemi_project: ennemi
 
-# SSH. Every host is reached with this one key; only the login account differs,
-# and that is set per host next to the host itself.
+# Credentials live in .env at the root of the checkout, which is git-ignored;
+# .env.example is the committed template. Nothing secret belongs in this
+# repository, so every value below is read from that file rather than written
+# here.
 #
-# The key is named explicitly so a run does not depend on ~/.ssh/config or on
-# ssh-agent holding the right identity.
-ansible_ssh_private_key_file: ~/.ssh/id_rsa
+# The path is derived from the inventory rather than the working directory, so
+# a run works the same from anywhere. `errors: ignore` makes a missing file or
+# key an empty value instead of a crash — the roles assert on the empty value
+# and say what to do about it, which is a far better error than a traceback.
+#
+# The file is read directly, not through the shell, so `./deploy` and a bare
+# `ansible-playbook` behave identically and nothing has to be exported first.
+ennemi_env_file: "{{ inventory_dir | dirname }}/.env"
 
-ansible_port: 22
-
-# Offer only the key above: without this, ssh walks its default identity list
-# and can exhaust MaxAuthTries before reaching it.
-ansible_ssh_common_args: -o IdentitiesOnly=yes
+postgres_app_password: >-
+  {{ lookup('ansible.builtin.ini', 'POSTGRES_APP_PASSWORD',
+            type='properties', file=ennemi_env_file, errors='ignore')
+     | default('', true) }}

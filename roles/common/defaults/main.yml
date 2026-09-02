@@ -14,16 +14,17 @@ common_packages:
   - vim
   - curl
 
-# The admin account every host must have. On ennemi-brain it already exists
-# (uid 1000) and these settings match it, so the tasks are a no-op there.
+# The admin account every host must have. On ennemi-brain and ennemi-dev it
+# already exists (uid 1000) and these settings match it, so the tasks are a
+# no-op there.
 common_user: ennemi
 common_user_shell: /bin/bash
 
 # Groups the account is *added* to; existing group memberships are kept.
 common_user_groups: [sudo]
 
-# Public half of the key used to reach both hosts. Read from the controller at
-# run time, so rotating the key on this machine is enough.
+# Public half of the key used to reach the production hosts. Read from the
+# controller at run time, so rotating the key on this machine is enough.
 common_user_public_key_file: ~/.ssh/id_rsa.pub
 
 # A NOPASSWD rule in /etc/sudoers.d/ennemi. Set to false to drop the rule and
