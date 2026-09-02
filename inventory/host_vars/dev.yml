@@ -1,0 +1,8 @@
+---
+# Login account on the dev box. The key, port and ssh options are shared with
+# every other host and live in group_vars/all.yml.
+ansible_user: nico
+
+# nginx: no site is served from this machine yet. Left empty rather than
+# omitted, so it is clear the stock default site is removed on purpose.
+nginx_sites: []

@@ -1,0 +1,8 @@
+---
+# AdGuard Home reads its configuration only at startup, and it rewrites the
+# file itself on shutdown — so the restart has to happen in the same run that
+# changed it, or the change is written back out and lost.
+- name: Restart AdGuard Home
+  ansible.builtin.command: snap restart {{ adguard_snap }}
+  become: true
+  changed_when: true

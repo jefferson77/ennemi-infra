@@ -1,0 +1,6 @@
+---
+# Galaxy dependencies. Install with:
+#   ansible-galaxy install -r requirements.yml
+collections:
+  - name: ansible.posix
+roles: []

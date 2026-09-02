@@ -1,0 +1,28 @@
+---
+# Keep tailscale at the newest version the repository offers on every run.
+# Pin it to a version string (e.g. "1.102.3") to freeze it instead.
+tailscale_package_state: latest
+
+# Tailscale's own repository. Their installer writes the same paths, so a host
+# set up by hand is adopted rather than duplicated.
+tailscale_apt_keyring: /usr/share/keyrings/tailscale-archive-keyring.gpg
+tailscale_apt_uri: https://pkgs.tailscale.com/stable/ubuntu
+tailscale_apt_component: main
+
+# The one-line source their install script drops. The role writes a deb822
+# .sources file instead and removes this, so apt does not see the repo twice.
+tailscale_legacy_source: /etc/apt/sources.list.d/tailscale.list
+
+tailscale_service_enabled: true
+tailscale_service_state: started
+
+# MagicDNS. Accepting the tailnet DNS configuration is what makes tailnet names
+# resolve, so it is on by default.
+#
+# Turn it off on a host where something else already owns port 53 (ennemi-brain
+# runs AdGuard Home — see roles/adguard). There, tailscaled cannot install
+# split DNS and instead falls back to "direct" mode, in which it overwrites
+# /etc/resolv.conf with a file it has no resolver to fill in: DNS breaks and
+# MagicDNS still does not work. The local resolver forwards the tailnet suffix
+# instead.
+tailscale_accept_dns: true

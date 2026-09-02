@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+#
+# deploy — run playbooks/site.yml, optionally against a single host/group
+#          or restricted to a single role.
+#
+#   ./deploy                      everything, every host
+#   ./deploy vps                  only the hosts of the group "vps"
+#   ./deploy ennemi-brain         only that host
+#   ./deploy common               only the role "common", every host
+#   ./deploy vps common           combine the two (any order)
+#   ./deploy --check --diff       dry run (extra flags go to ansible-playbook)
+#   ./deploy vps -e common_apt_autoclean=false
+#
+set -euo pipefail
+
+cd "$(dirname "$(readlink -f "$0")")"
+
+PLAYBOOK=playbooks/site.yml
+
+die() { printf 'deploy: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    cat <<'USAGE'
+deploy — run playbooks/site.yml, optionally against a single host/group
+         or restricted to a single role.
+
+  ./deploy                      everything, every host
+  ./deploy vps                  only the hosts of the group "vps"
+  ./deploy ennemi-brain         only that host
+  ./deploy common               only the role "common", every host
+  ./deploy vps common           combine the two (any order)
+  ./deploy --check --diff       dry run (extra flags go to ansible-playbook)
+  ./deploy vps -e common_apt_autoclean=false
+USAGE
+    printf '\nKnown targets:\n'
+    printf '  hosts/groups : %s\n' "$(inventory_names | tr '\n' ' ')"
+    printf '  roles        : %s\n' "$(role_names | tr '\n' ' ')"
+}
+
+role_names() {
+    find roles -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort
+}
+
+# Every host and group name known to the inventory, one per line.
+inventory_names() {
+    ansible-inventory --list 2>/dev/null | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+names = {k for k in data if k != "_meta"}
+names |= set(data.get("_meta", {}).get("hostvars", {}))
+for group in data.values():
+    if isinstance(group, dict):
+        names.update(group.get("hosts", []))
+print("\n".join(sorted(names)))
+'
+}
+
+contains() { grep -qxF "$1" <<<"$2"; }
+
+command -v ansible-playbook >/dev/null || die 'ansible-playbook not found in PATH.'
+
+limit=""
+tags=""
+passthrough=()
+
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help) usage; exit 0 ;;
+        -*)        passthrough+=("$arg"); continue ;;
+    esac
+
+    # A bare word is a role, a host or a group — resolve it against the repo.
+    if contains "$arg" "$(role_names)"; then
+        [[ -n $tags ]] && die "only one role at a time (already selecting '$tags')."
+        tags="$arg"
+    elif contains "$arg" "$(inventory_names)"; then
+        [[ -n $limit ]] && die "only one host or group at a time (already limiting to '$limit')."
+        limit="$arg"
+    else
+        printf 'deploy: unknown target %s\n\n' "$arg" >&2
+        usage >&2
+        exit 1
+    fi
+done
+
+cmd=(ansible-playbook "$PLAYBOOK")
+[[ -n $limit ]] && cmd+=(--limit "$limit")
+[[ -n $tags  ]] && cmd+=(--tags "$tags")
+[[ ${#passthrough[@]} -gt 0 ]] && cmd+=("${passthrough[@]}")
+
+printf '→ %s\n' "${cmd[*]}"
+exec "${cmd[@]}"

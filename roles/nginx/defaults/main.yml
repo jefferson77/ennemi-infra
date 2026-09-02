@@ -1,0 +1,15 @@
+---
+# Sites to deploy, by file name. Each name must exist as
+# roles/nginx/files/sites/<name>; it is copied to sites-available and linked
+# into sites-enabled. Set per group in inventory/group_vars/.
+nginx_sites: []
+
+# Fragments copied to /etc/nginx/conf.d/, from roles/nginx/files/conf.d/.
+nginx_conf_d: []
+
+# Remove the stock "default" site nginx enables on install, so the sites listed
+# above are the only ones served.
+nginx_disable_default_site: true
+
+nginx_service_enabled: true
+nginx_service_state: started

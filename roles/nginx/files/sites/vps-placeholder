@@ -1,0 +1,23 @@
+# Placeholder default site for ennemi-vps.
+#
+# The VPS serves nothing real yet: this answers on port 80 so nginx has a
+# default server, and returns 204 for everything except a health probe.
+# Replace it with a proper site config when the VPS gets a job to do.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    access_log /var/log/nginx/vps-placeholder.access.log;
+    error_log  /var/log/nginx/vps-placeholder.error.log;
+
+    location = /healthz {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
+
+    location / {
+        return 204;
+    }
+}

@@ -1,0 +1,23 @@
+---
+# AdGuard Home was installed by hand as a snap and keeps its own configuration
+# (the web UI rewrites this file). The role does not install or template it: it
+# owns two settings on it and nothing else.
+adguard_config: /var/snap/adguard-home/current/AdGuardHome.yaml
+adguard_snap: adguard-home
+
+# MagicDNS. AdGuard is the only resolver on this host, so it is the one that
+# has to know where tailnet names live: queries for the tailnet suffix go to
+# 100.100.100.100, everything else keeps going to the normal upstreams and
+# stays filtered.
+#
+# The suffix is the tailnet's own, from `tailscale dns status`. Matching on it
+# rather than on the whole of ts.net keeps public ts.net names off the tailnet
+# resolver.
+adguard_magicdns_suffix: tail21508.ts.net
+adguard_magicdns_resolver: 100.100.100.100
+
+# /etc/resolv.conf. With the systemd-resolved stub disabled to free port 53,
+# nothing else writes a working one: glibc was falling back to 127.0.0.1 by
+# accident, and tailscaled had overwritten the file with a nameserver-less one.
+adguard_manage_resolv_conf: true
+adguard_resolv_conf: /etc/resolv.conf

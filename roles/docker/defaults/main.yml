@@ -1,0 +1,25 @@
+---
+# Packages come from Docker's own repository: Ubuntu's docker.io lags behind
+# and ships no compose plugin, and "docker compose" is what we want here.
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# Repository. "stable" is the only channel that belongs on these hosts.
+docker_apt_channel: stable
+docker_apt_key_url: https://download.docker.com/linux/ubuntu/gpg
+docker_apt_keyring: /etc/apt/keyrings/docker.asc
+
+# Accounts that may talk to the docker socket without sudo.
+#
+# WARNING: membership of the docker group is root-equivalent — a member can
+# start a container that bind-mounts / and edit anything on the host. Keep this
+# list to accounts you would give full sudo to anyway.
+docker_users:
+  - "{{ common_user | default('ennemi') }}"
+
+docker_service_enabled: true
+docker_service_state: started

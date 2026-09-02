@@ -1,0 +1,31 @@
+---
+# Skip the cache refresh if apt already updated less than an hour ago.
+common_apt_cache_valid_time: 3600
+
+# Passed straight to the apt module after the dist-upgrade.
+common_apt_autoremove: true
+common_apt_autoclean: true
+
+# Baseline toolset installed on every host. Add to this list rather than
+# installing by hand, so a rebuilt host comes back with the same tools.
+common_packages:
+  - git
+  - htop
+  - vim
+  - curl
+
+# The admin account every host must have. On ennemi-brain it already exists
+# (uid 1000) and these settings match it, so the tasks are a no-op there.
+common_user: ennemi
+common_user_shell: /bin/bash
+
+# Groups the account is *added* to; existing group memberships are kept.
+common_user_groups: [sudo]
+
+# Public half of the key used to reach both hosts. Read from the controller at
+# run time, so rotating the key on this machine is enough.
+common_user_public_key_file: ~/.ssh/id_rsa.pub
+
+# A NOPASSWD rule in /etc/sudoers.d/ennemi. Set to false to drop the rule and
+# fall back to the plain sudo-group membership (which prompts for a password).
+common_user_passwordless_sudo: true

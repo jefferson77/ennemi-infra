@@ -1,0 +1,126 @@
+---
+- name: Fail early on a non-apt distribution
+  ansible.builtin.assert:
+    that: ansible_facts['pkg_mgr'] in ['apt', 'apt_rpm']
+    fail_msg: >-
+      The common role only manages apt-based hosts, but
+      {{ inventory_hostname }} reports pkg_mgr={{ ansible_facts['pkg_mgr'] }}.
+    quiet: true
+
+- name: Create the {{ common_user }} account
+  ansible.builtin.user:
+    name: "{{ common_user }}"
+    shell: "{{ common_user_shell }}"
+    groups: "{{ common_user_groups }}"
+    append: true
+    create_home: true
+    state: present
+  become: true
+  tags: [user]
+
+# exclusive: false so any key already trusted by the account survives.
+- name: Authorise the SSH key for {{ common_user }}
+  ansible.posix.authorized_key:
+    user: "{{ common_user }}"
+    key: "{{ lookup('ansible.builtin.file', common_user_public_key_file | expanduser) }}"
+    exclusive: false
+    state: present
+  become: true
+  tags: [user]
+
+- name: Grant {{ common_user }} passwordless sudo
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/{{ common_user }}"
+    content: "{{ common_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: visudo -cf %s
+  become: true
+  when: common_user_passwordless_sudo | bool
+  tags: [user]
+
+- name: Drop the passwordless sudo rule when it is turned off
+  ansible.builtin.file:
+    path: "/etc/sudoers.d/{{ common_user }}"
+    state: absent
+  become: true
+  when: not common_user_passwordless_sudo | bool
+  tags: [user]
+
+- name: Update the apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: "{{ common_apt_cache_valid_time }}"
+  become: true
+  register: common_apt_cache_result
+  until: common_apt_cache_result is succeeded
+  retries: 3
+  delay: 10
+  tags: [packages]
+
+- name: Upgrade all packages (dist-upgrade)
+  ansible.builtin.apt:
+    upgrade: dist
+    autoremove: "{{ common_apt_autoremove | bool }}"
+    autoclean: "{{ common_apt_autoclean | bool }}"
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  tags: [packages]
+
+- name: Install the baseline packages
+  ansible.builtin.apt:
+    name: "{{ common_packages }}"
+    state: present
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  tags: [packages]
+
+- name: Check whether the upgrade requires a reboot
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: common_reboot_required
+  tags: [packages]
+
+- name: Read the packages that asked for the reboot
+  ansible.builtin.slurp:
+    src: /var/run/reboot-required.pkgs
+  register: common_reboot_pkgs
+  when: common_reboot_required.stat.exists
+  failed_when: false
+  tags: [packages]
+
+- name: Record the reboot state for the end-of-run summary
+  ansible.builtin.set_fact:
+    common_reboot_needed: "{{ common_reboot_required.stat.exists }}"
+    common_reboot_packages: >-
+      {{ (common_reboot_pkgs.content | default('') | b64decode).split()
+         | unique | sort | list }}
+  tags: [packages]
+
+# This role never reboots anything: a reboot cuts the SSH session it was
+# ordered from, and on ennemi-brain it would kill the controller running the
+# playbook. The hosts are listed here instead, to be rebooted by hand.
+- name: List the hosts that need a manual reboot
+  ansible.builtin.debug:
+    msg: >-
+      {{ item }} needs a reboot
+      ({{ hostvars[item].common_reboot_packages | default([]) | join(', ')
+          | default('no package list', true) }})
+  loop: "{{ ansible_play_hosts }}"
+  loop_control:
+    label: "{{ item }}"
+  when: hostvars[item].common_reboot_needed | default(false)
+  run_once: true
+  tags: [packages]
+
+- name: Report that no host needs a reboot
+  ansible.builtin.debug:
+    msg: No host needs a reboot.
+  when: >-
+    ansible_play_hosts | map('extract', hostvars, 'common_reboot_needed')
+    | map('default', false) | select | list | length == 0
+  run_once: true
+  tags: [packages]

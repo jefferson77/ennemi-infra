@@ -1,0 +1,3 @@
+---
+# No handlers: the role deliberately never reboots a host. See the summary
+# tasks at the end of tasks/main.yml.

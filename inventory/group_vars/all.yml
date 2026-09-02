@@ -1,0 +1,16 @@
+---
+# Applies to every host in the project.
+ennemi_project: ennemi
+
+# SSH. Every host is reached with this one key; only the login account differs,
+# and that is set per host next to the host itself.
+#
+# The key is named explicitly so a run does not depend on ~/.ssh/config or on
+# ssh-agent holding the right identity.
+ansible_ssh_private_key_file: ~/.ssh/id_rsa
+
+ansible_port: 22
+
+# Offer only the key above: without this, ssh walks its default identity list
+# and can exhaust MaxAuthTries before reaching it.
+ansible_ssh_common_args: -o IdentitiesOnly=yes

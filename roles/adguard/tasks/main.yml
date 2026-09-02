@@ -1,0 +1,58 @@
+---
+# This role configures AdGuard Home where it is already running; it never
+# installs it. Every other host in the inventory resolves through tailscaled or
+# systemd-resolved, so the role detects the config and skips itself there.
+
+- name: Look for an AdGuard Home configuration
+  ansible.builtin.stat:
+    path: "{{ adguard_config }}"
+  register: adguard_config_file
+  become: true
+
+- name: Report the hosts with no AdGuard Home to configure
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: no AdGuard Home at {{ adguard_config }},
+      skipping.
+  when: not adguard_config_file.stat.exists
+
+- name: Configure AdGuard Home
+  when: adguard_config_file.stat.exists
+  block:
+
+    # The entry has to be quoted: unquoted, "[/suffix/]addr" is a YAML flow
+    # sequence, not a string. The regexp matches any resolver already set for
+    # this suffix, so changing adguard_magicdns_resolver rewrites the line in
+    # place instead of adding a second one.
+    - name: Route the MagicDNS suffix to the tailscale resolver
+      ansible.builtin.lineinfile:
+        path: "{{ adguard_config }}"
+        insertafter: '^  upstream_dns:$'
+        regexp: "^\\s+- '\\[/{{ adguard_magicdns_suffix | regex_escape }}/\\]"
+        line: "    - '[/{{ adguard_magicdns_suffix }}/]{{ adguard_magicdns_resolver }}'"
+        state: present
+        backup: true
+      become: true
+      notify: Restart AdGuard Home
+
+    # Written after the tailscale role has turned accept-dns off, so tailscaled
+    # is no longer overwriting this file. The search domain is what lets short
+    # names such as "ennemi-vps" resolve.
+    - name: Point the host at AdGuard Home for DNS
+      ansible.builtin.copy:
+        dest: "{{ adguard_resolv_conf }}"
+        content: |
+          # Managed by ansible (roles/adguard). Changes here are overwritten.
+          #
+          # AdGuard Home listens on *:53 and is this host's only resolver: the
+          # systemd-resolved stub is disabled to leave that port free, so the
+          # loopback address below is AdGuard itself.
+          nameserver 127.0.0.1
+          search {{ adguard_magicdns_suffix }}
+          options edns0 trust-ad
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+      become: true
+      when: adguard_manage_resolv_conf | bool

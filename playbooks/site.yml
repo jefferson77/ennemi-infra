@@ -1,0 +1,22 @@
+---
+# Entry point: applies every shared role to every ennemi host.
+#
+#   ansible-playbook playbooks/site.yml
+#
+# Every role is tagged with its own name so ./deploy <role> can select it.
+- name: Apply the ennemi baseline
+  hosts: all
+  gather_facts: true
+  roles:
+    - role: common
+      tags: [common]
+    - role: docker
+      tags: [docker]
+    - role: tailscale
+      tags: [tailscale]
+    # After tailscale: it turns accept-dns off on the AdGuard host, and only
+    # then is /etc/resolv.conf ours to write.
+    - role: adguard
+      tags: [adguard]
+    - role: nginx
+      tags: [nginx]

@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: docker
+  author: nico
+  description: Docker Engine and the compose plugin, from Docker's apt repository.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

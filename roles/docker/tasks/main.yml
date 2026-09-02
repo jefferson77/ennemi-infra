@@ -1,0 +1,91 @@
+---
+- name: Fail early if Docker publishes nothing for this distribution
+  ansible.builtin.assert:
+    that: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    fail_msg: >-
+      The docker role installs from Docker's Ubuntu/Debian repository, but
+      {{ inventory_hostname }} runs {{ ansible_facts['distribution'] }}.
+    quiet: true
+
+- name: Install the repository prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+    state: present
+  become: true
+
+# The apt architecture is not a fact: ansible_architecture says x86_64 where
+# apt wants amd64, and pinning it keeps a multiarch host from asking Docker
+# for an i386 index that does not exist.
+- name: Read the apt architecture
+  ansible.builtin.command: dpkg --print-architecture
+  register: docker_dpkg_arch
+  changed_when: false
+  check_mode: false   # read-only, must run so --check sees the real value
+
+- name: Create the keyring directory
+  ansible.builtin.file:
+    path: "{{ docker_apt_keyring | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Install Docker's signing key
+  ansible.builtin.get_url:
+    url: "{{ docker_apt_key_url }}"
+    dest: "{{ docker_apt_keyring }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Configure Docker's apt repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: "https://download.docker.com/linux/{{ ansible_facts['distribution'] | lower }}"
+    suites: ["{{ ansible_facts['distribution_release'] }}"]
+    components: ["{{ docker_apt_channel }}"]
+    architectures: ["{{ docker_dpkg_arch.stdout }}"]
+    signed_by: "{{ docker_apt_keyring }}"
+    enabled: true
+    state: present
+  become: true
+
+- name: Install Docker Engine and the compose plugin
+  ansible.builtin.apt:
+    name: "{{ docker_packages }}"
+    state: present
+    update_cache: true
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Enable and start the docker service
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: "{{ docker_service_enabled | bool }}"
+    state: "{{ docker_service_state }}"
+  become: true
+
+# The group is created by the package install above.
+- name: Let the listed accounts use docker without sudo
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: docker
+    append: true
+  become: true
+  loop: "{{ docker_users }}"
+
+- name: Check that the engine and the compose plugin answer
+  ansible.builtin.command: docker compose version
+  become: true
+  changed_when: false
+  register: docker_compose_version
+
+- name: Report the installed versions
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: {{ docker_compose_version.stdout }}"

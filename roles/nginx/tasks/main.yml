@@ -1,0 +1,66 @@
+---
+- name: Install nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+# nginx.conf itself is left alone: on ennemi-brain it is byte-identical to the
+# packaged conffile, so the distribution stays in charge of it.
+- name: Deploy the conf.d fragments
+  ansible.builtin.copy:
+    src: "conf.d/{{ item }}"
+    dest: "/etc/nginx/conf.d/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  loop: "{{ nginx_conf_d }}"
+  notify: Reload nginx
+
+- name: Deploy the site configurations
+  ansible.builtin.copy:
+    src: "sites/{{ item }}"
+    dest: "/etc/nginx/sites-available/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  loop: "{{ nginx_sites }}"
+  notify: Reload nginx
+
+- name: Enable the site configurations
+  ansible.builtin.file:
+    src: "/etc/nginx/sites-available/{{ item }}"
+    dest: "/etc/nginx/sites-enabled/{{ item }}"
+    state: link
+  become: true
+  loop: "{{ nginx_sites }}"
+  notify: Reload nginx
+
+- name: Disable the stock default site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  become: true
+  when:
+    - nginx_disable_default_site | bool
+    - "'default' not in nginx_sites"
+  notify: Reload nginx
+
+# Runs before the handlers, so a broken config fails the play instead of being
+# reloaded into a live server.
+- name: Validate the whole configuration
+  ansible.builtin.command: nginx -t
+  become: true
+  changed_when: false
+  check_mode: false
+
+- name: Enable and start nginx
+  ansible.builtin.systemd_service:
+    name: nginx
+    enabled: "{{ nginx_service_enabled | bool }}"
+    state: "{{ nginx_service_state }}"
+  become: true

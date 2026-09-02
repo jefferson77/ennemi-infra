@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: tailscale
+  author: nico
+  description: Keeps tailscale installed and current from Tailscale's apt repository.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

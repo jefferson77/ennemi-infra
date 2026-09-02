@@ -1,0 +1,15 @@
+# Ansible
+*.retry
+collections/
+.vault_pass
+*.vault
+
+# Local overrides
+inventory/host_vars/*.local.yml
+inventory/group_vars/*.local.yml
+
+# Editors / OS
+.venv/
+__pycache__/
+*.swp
+.DS_Store

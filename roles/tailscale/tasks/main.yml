@@ -1,0 +1,110 @@
+---
+- name: Fail early if Tailscale publishes nothing for this distribution
+  ansible.builtin.assert:
+    that: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    fail_msg: >-
+      The tailscale role installs from Tailscale's Ubuntu/Debian repository,
+      but {{ inventory_hostname }} runs {{ ansible_facts['distribution'] }}.
+    quiet: true
+
+# apt wants amd64 where ansible_architecture says x86_64.
+- name: Read the apt architecture
+  ansible.builtin.command: dpkg --print-architecture
+  register: tailscale_dpkg_arch
+  changed_when: false
+  check_mode: false   # read-only, must run so --check sees the real value
+
+- name: Install Tailscale's signing key
+  ansible.builtin.get_url:
+    url: "{{ tailscale_apt_uri }}/{{ ansible_facts['distribution_release'] }}.noarmor.gpg"
+    dest: "{{ tailscale_apt_keyring }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Configure Tailscale's apt repository
+  ansible.builtin.deb822_repository:
+    name: tailscale
+    types: [deb]
+    uris: "{{ tailscale_apt_uri }}"
+    suites: ["{{ ansible_facts['distribution_release'] }}"]
+    components: ["{{ tailscale_apt_component }}"]
+    architectures: ["{{ tailscale_dpkg_arch.stdout }}"]
+    signed_by: "{{ tailscale_apt_keyring }}"
+    enabled: true
+    state: present
+  become: true
+  register: tailscale_repository
+
+- name: Remove the hand-installed one-line source
+  ansible.builtin.file:
+    path: "{{ tailscale_legacy_source }}"
+    state: absent
+  become: true
+
+- name: Install tailscale ({{ tailscale_package_state }})
+  ansible.builtin.apt:
+    name: tailscale
+    state: "{{ tailscale_package_state }}"
+    update_cache: true
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Enable and start tailscaled
+  ansible.builtin.systemd_service:
+    name: tailscaled
+    enabled: "{{ tailscale_service_enabled | bool }}"
+    state: "{{ tailscale_service_state }}"
+  become: true
+
+# Read first, so the play only reports a change when it really flips the
+# preference: "tailscale set" is silent and always exits 0.
+- name: Read the current tailscale preferences
+  ansible.builtin.command: tailscale debug prefs
+  register: tailscale_prefs
+  become: true
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Set accept-dns to {{ tailscale_accept_dns }}
+  ansible.builtin.command: >-
+    tailscale set
+    --accept-dns={{ 'true' if tailscale_accept_dns | bool else 'false' }}
+  become: true
+  changed_when: true
+  when:
+    - tailscale_prefs.stdout | default('') is search('^\s*{')
+    - (tailscale_prefs.stdout | from_json).get('CorpDNS', None)
+      != (tailscale_accept_dns | bool)
+
+- name: Read the installed version
+  ansible.builtin.command: tailscale version
+  register: tailscale_version
+  changed_when: false
+  check_mode: false
+
+# Joining a tailnet needs an auth key or an interactive login, so the role
+# never runs "tailscale up" — it only reports whether the node is connected.
+- name: Read the tailscale backend state
+  ansible.builtin.command: tailscale status --json
+  register: tailscale_status
+  become: true
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Report the tailscale state
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: tailscale {{ tailscale_version.stdout_lines[0] }},
+      backend {{ tailscale_backend_state }}.
+      {{ 'Run `sudo tailscale up` on it to join the tailnet.'
+         if tailscale_backend_state != 'Running' else '' }}
+  vars:
+    tailscale_backend_state: >-
+      {{ (tailscale_status.stdout | from_json).get('BackendState', 'unknown')
+         if tailscale_status.stdout | default('') is search('^\s*{')
+         else 'unreadable' }}
