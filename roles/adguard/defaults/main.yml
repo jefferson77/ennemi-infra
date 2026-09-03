@@ -16,6 +16,18 @@ adguard_snap: adguard-home
 adguard_magicdns_suffix: tail21508.ts.net
 adguard_magicdns_resolver: 100.100.100.100
 
+# LAN names. The UniFi router holds the internal records for this project's
+# domain (www.ennemi.net -> the box nginx runs on, dev.ennemi.net -> the dev
+# box). Public DNS answers those names with the site's DDNS address instead,
+# which sends a LAN client out to the edge proxy and back in again. So queries
+# for the domain go to the router and everything else keeps going to the normal
+# upstreams, exactly as the tailnet suffix above does.
+#
+# The apex ennemi.net has no internal record; the router forwards it, so routing
+# the whole domain here does not change what the apex resolves to.
+adguard_lan_domain: ennemi.net
+adguard_lan_resolver: 192.168.0.1
+
 # /etc/resolv.conf. With the systemd-resolved stub disabled to free port 53,
 # nothing else writes a working one: glibc was falling back to 127.0.0.1 by
 # accident, and tailscaled had overwritten the file with a nameserver-less one.

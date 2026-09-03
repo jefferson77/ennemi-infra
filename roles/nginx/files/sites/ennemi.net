@@ -1,21 +1,42 @@
-# HTTP Server Block - Redirect to HTTPS
+# Scheme handling behind an edge proxy.
+#
+# When a reverse proxy in front terminates TLS (a Caddy at the edge has done
+# this, and a Traefik did before it) it forwards to this nginx over plain HTTP.
+# An unconditional "http -> https" redirect here then bounces that request back
+# to the edge, which forwards it here again, forever: ERR_TOO_MANY_REDIRECTS.
+# That is exactly what took www.ennemi.net down, so do not reintroduce a blanket
+# redirect -- redirect only a request that genuinely reached nginx over plain
+# HTTP, i.e. one carrying no X-Forwarded-Proto.
+# Keyed on both, because neither alone is enough: a direct HTTPS client sends no
+# X-Forwarded-Proto either, and redirecting *that* to https loops just as badly.
+map "$scheme:$http_x_forwarded_proto" $ennemi_needs_https_redirect {
+    "http:"   1;   # plain HTTP straight from a client: upgrade it
+    default   0;   # already https, or an edge proxy told us the client's scheme
+}
+
+# The scheme the *client* used, for the backends behind this nginx. Without
+# this they are told "http" whenever the edge proxy forwards to us, which
+# breaks the absolute URLs and cookies of apps like Grafana.
+map $http_x_forwarded_proto $ennemi_client_proto {
+    default   $http_x_forwarded_proto;
+    ""        $scheme;
+}
+
+# Main Application - serves both plain HTTP (direct, or from the edge proxy)
+# and HTTPS (direct, e.g. LAN clients whose DNS points straight at this host).
 server {
     listen 80;
     listen [::]:80;
-    server_name www.ennemi.net ennemi.net;
-
-    # Redirect all HTTP traffic to HTTPS
-    location / {
-        return 301 https://www.ennemi.net$request_uri;
-    }
-}
-
-# HTTPS Server Block - Main Application
-server {
     listen 443 ssl;
     http2 on;
     listen [::]:443 ssl;
     server_name www.ennemi.net ennemi.net;
+
+    # See the map above. `return` inside `if` at server level is one of the
+    # supported uses of `if` in nginx.
+    if ($ennemi_needs_https_redirect) {
+        return 301 https://www.ennemi.net$request_uri;
+    }
 
     # SSL Certificates
     ssl_certificate /etc/letsencrypt/live/www.ennemi.net/fullchain.pem;
@@ -118,7 +139,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $ennemi_client_proto;
 
         # Buffering settings
         proxy_buffering off;
@@ -134,7 +155,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $ennemi_client_proto;
 
         proxy_buffering off;
     }
@@ -150,7 +171,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $ennemi_client_proto;
 
         # Buffering settings
         proxy_buffering off;
@@ -173,7 +194,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $ennemi_client_proto;
 
         # WebSocket-specific settings
         proxy_buffering off;
@@ -246,7 +267,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $ennemi_client_proto;
 
         # CORS headers for WHEP
         add_header Access-Control-Allow-Origin "*" always;
@@ -285,7 +306,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $ennemi_client_proto;
 
         # Disable cache for dynamic content
         proxy_cache_bypass $http_upgrade;

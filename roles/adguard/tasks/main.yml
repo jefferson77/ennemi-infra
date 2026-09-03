@@ -35,6 +35,20 @@
       become: true
       notify: Restart AdGuard Home
 
+    # Same shape and the same quoting caveat as the MagicDNS entry above; the
+    # regexp matches whatever resolver is already set for the domain, so
+    # changing adguard_lan_resolver rewrites the line instead of adding a second.
+    - name: Route the project domain to the LAN router
+      ansible.builtin.lineinfile:
+        path: "{{ adguard_config }}"
+        insertafter: '^  upstream_dns:$'
+        regexp: "^\\s+- '\\[/{{ adguard_lan_domain | regex_escape }}/\\]"
+        line: "    - '[/{{ adguard_lan_domain }}/]{{ adguard_lan_resolver }}'"
+        state: present
+        backup: true
+      become: true
+      notify: Restart AdGuard Home
+
     # Written after the tailscale role has turned accept-dns off, so tailscaled
     # is no longer overwriting this file. The search domain is what lets short
     # names such as "ennemi-vps" resolve.
