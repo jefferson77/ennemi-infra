@@ -63,6 +63,18 @@
     - role: ennemi_web_api
       tags: [ennemi_web_api]
 
+# The show webapp, on ennemi-brain only. Node first, as above. The build and
+# the show content are pushed by the webapp repository's `make deploy`; this
+# play provides the directory, the unit and the runtime around them.
+- name: Apply the show webapp
+  hosts: webapp
+  gather_facts: true
+  roles:
+    - role: nodejs
+      tags: [nodejs]
+    - role: ennemi_webapp
+      tags: [ennemi_webapp]
+
 # The development machine gets one extra role. A separate play scoped to the
 # "dev" group, rather than a `when:` on the role, so the role never has to know
 # which host it is running on and `./deploy dev` reads the same as the rest.

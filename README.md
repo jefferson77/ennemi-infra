@@ -34,6 +34,7 @@ roles/dragonfly/         # Dragonfly (redis replacement), as a systemd service
 roles/postgres/          # PostgreSQL 18, from the Ubuntu archive
 roles/nodejs/            # Node.js from NodeSource, one major line (ennemi-vps)
 roles/ennemi_web_api/    # ennemi-web's live-state API, as a systemd service
+roles/ennemi_webapp/     # the show webapp on ennemi-brain, as a systemd service
 roles/dev/               # development-machine toolchain (ennemi-dev only)
 ```
 
@@ -285,11 +286,16 @@ roles/nginx/files/conf.d/    -> /etc/nginx/conf.d/
 | Host           | `nginx_sites`                        | `nginx_tls_sites`   | `nginx_stream_sites` | `nginx_conf_d`     |
 |----------------|--------------------------------------|---------------------|----------------------|--------------------|
 | `ennemi-brain` | `ennemi.net`, `dev.ennemi.net`       | —                   | —                    | `stub_status.conf` |
+
+`ennemi-brain` also sets `nginx_brotli: true`: `ennemi.net` serves the webapp's pre-compressed
+build with `brotli_static`.
 | `ennemi-vps`   | `vps-placeholder`, `ennemi-web`  | `ennemi-web-tls`| —                    | —                  |
 | `ennemi-dev`   | `ennemi.net-edge`                    | —                   | `ennemi.net-tls`     | —                  |
 
-`ennemi-brain`'s two files were copied off the running host byte for byte, so
-applying the role there reports `changed=0` and never reloads it.
+`ennemi-brain`'s two files were copied off the running host byte for byte. `ennemi.net` has
+since been repointed from `/home/ennemi/webapp` to `/var/www/webapp` (its `/_nuxt/`,
+`/images/` and `/audio/` aliases), where the webapp's `make deploy` now puts the build — see
+*The `ennemi_webapp` role*. `dev.ennemi.net` is still the copy as found.
 
 ### Sites that need a certificate (`nginx_tls_sites`)
 
@@ -882,10 +888,10 @@ Variables: see `roles/postgres/defaults/main.yml`.
 
 ## The `nodejs` role
 
-Node.js on the hosts of the `web_api` group (the VPS), from
+Node.js on the hosts of the `web_api` and `webapp` groups (the VPS and `ennemi-brain`), from
 [NodeSource](https://github.com/nodesource/distributions)'s apt repository —
 one repository per major line, so the host gets `nodejs_major` (24, the major in
-`ennemi-web`'s `.nvmrc`) and every security release of it through apt, which
+both `ennemi-web`'s and the webapp's `.nvmrc`) and every security release of it through apt, which
 `common`'s dist-upgrade then keeps current. Ubuntu's own `nodejs` follows the
 distribution's freeze instead.
 
@@ -937,6 +943,71 @@ systemctl status ennemi-web-api
 journalctl -u ennemi-web-api        # one line per state change or refused write
 curl http://127.0.0.1:8787/api/live
 ```
+
+## The `ennemi_webapp` role
+
+The show app itself — audience phones, the Control desk, the Stage display — on
+`ennemi-brain` (the `webapp` group), behind the `ennemi.net` nginx site.
+
+| | |
+|---|---|
+| Code | `/var/www/webapp`: `.output/`, pushed by the webapp's `make deploy` |
+| Show content | `content/`, `public/`, `raw_assets/` in the same directory |
+| Unit | `/etc/systemd/system/ennemi-webapp.service` |
+| Runs as | `ennemi` — owns the directory, and is the account the deploy rsyncs as |
+| State | Dragonfly (db 0), not on disk |
+| Listens | `*:3000`, proxied by the `ennemi.net` site |
+
+The app is **built on `ennemi-dev`** and only the result reaches brain, the same model
+as ennemi-web on the VPS. It replaces the arrangement where `/home/ennemi/webapp` on
+brain was both the git checkout and the running instance, started through nvm by a
+hand-written unit; the role writes its own unit at that same path and takes it over.
+
+**Who owns what.** The split is the ennemi-web one, with one difference that shapes the
+rest: the service **writes** inside its own directory. The Control desk's Edit Spectacle
+and Asset Manager tabs save to `content/`, `public/` and `raw_assets/`, which the server
+resolves against its working directory, and nginx serves `public/images` and
+`public/audio` straight from there.
+
+| | `ennemi-infra` (here) | webapp repository | the running service |
+| --- | --- | --- | --- |
+| `/var/www/webapp` | creates it, `ennemi:ennemi 0755` | owns everything inside | — |
+| `.output/` | — | rsyncs it with `--delete` | reads only |
+| `content/`, `public/`, `raw_assets/` | creates them empty | rsyncs them from git | writes to them |
+| the unit, Node, nginx | owns | restarts the unit after a deploy | — |
+
+So the directory belongs to `ennemi` rather than to root or a `DynamicUser`: both the
+deploy and the service write there, and nothing needs sudo to do it. The webapp deploy
+guards the content directories itself — it refuses to overwrite edits made in production
+until they have been pulled back into git (`make pull-content` there).
+
+The unit is hardened with `ProtectSystem=strict` and `ReadWritePaths=` on exactly those
+three directories, so the build and everything else on the host are read-only to it.
+`ProtectHome=yes` is what proves nothing still reaches into `/home/ennemi/webapp`.
+
+`nuxt.config.ts` computes its public `networkIp` from the interfaces of the machine that
+runs `nuxt build`, which is now `ennemi-dev`. The unit overrides it at runtime with
+`NUXT_PUBLIC_NETWORK_IP`, set to the host's own default address, as it was when brain
+built itself.
+
+As in `ennemi_web_api`, the unit carries `ConditionPathExists` on the entry point and the
+restart handler waits for a build. So on a host with an empty `/var/www/webapp` the role
+rewrites the unit and **restarts nothing**: whatever was already serving keeps serving
+until the first deploy replaces it.
+
+```bash
+./deploy ennemi-brain --tags=nodejs,ennemi_webapp   # the directory, Node and the unit
+# then, in the webapp repository:
+make deploy                                         # the build, the content, the restart
+./deploy ennemi-brain nginx                         # the site's aliases, onto /var/www/webapp
+systemctl status ennemi-webapp
+journalctl -u ennemi-webapp -f
+```
+
+Restarting the service drops every connected phone and stage display — neither this role
+nor the webapp deploy should run during a show.
+
+Variables: see `roles/ennemi_webapp/defaults/main.yml`.
 
 ## The `dev` role
 

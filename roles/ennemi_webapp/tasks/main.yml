@@ -1,0 +1,102 @@
+---
+- name: Check that Node.js is installed
+  ansible.builtin.stat:
+    path: "{{ ennemi_webapp_node }}"
+  register: ennemi_webapp_node_stat
+  become: true
+
+- name: Fail early without Node.js
+  ansible.builtin.assert:
+    that: ennemi_webapp_node_stat.stat.exists
+    fail_msg: >-
+      {{ inventory_hostname }} has no {{ ennemi_webapp_node }}. The nodejs role
+      installs it, and runs before this one in playbooks/site.yml:
+      ./deploy {{ inventory_hostname }} --tags=nodejs,ennemi_webapp
+    quiet: true
+  when: not ansible_check_mode
+
+# Owned by the service account, unlike nginx_webroots and the ennemi-web-api
+# code directory: the webapp deploy rsyncs into it as that account, and the
+# service writes show content inside it at runtime. 0755 so nginx (www-data)
+# can read the build and the uploaded assets it serves directly.
+- name: Create the application directory
+  ansible.builtin.file:
+    path: "{{ ennemi_webapp_dir }}"
+    state: directory
+    owner: "{{ ennemi_webapp_user }}"
+    group: "{{ ennemi_webapp_group }}"
+    mode: "0755"
+  become: true
+
+# Owner only, no mode: the deploy's rsync -a carries the modes over from the
+# repository, and asserting one here would flip them back on every run.
+- name: Create the directories the service writes to
+  ansible.builtin.file:
+    path: "{{ ennemi_webapp_dir }}/{{ item }}"
+    state: directory
+    owner: "{{ ennemi_webapp_user }}"
+    group: "{{ ennemi_webapp_group }}"
+  become: true
+  loop: "{{ ennemi_webapp_writable_dirs }}"
+
+- name: Look for a deployed build
+  ansible.builtin.stat:
+    path: "{{ ennemi_webapp_entry }}"
+  register: ennemi_webapp_entry_stat
+  become: true
+
+# Takes over /etc/systemd/system/ennemi-webapp.service, which was written by
+# hand when the app ran from /home/ennemi/webapp. The old process keeps running
+# until something restarts it, and the handler only does once a build is here.
+- name: Deploy the service unit
+  ansible.builtin.template:
+    src: ennemi-webapp.service.j2
+    dest: "{{ ennemi_webapp_unit_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: Restart ennemi-webapp
+
+# daemon_reload here rather than in a handler, as in the dragonfly role. Before
+# the first deploy `started` is omitted, so an old process still running from
+# a previous installation is left alone rather than replaced by a unit whose
+# ConditionPathExists would skip it.
+- name: Enable ennemi-webapp
+  ansible.builtin.systemd_service:
+    name: "{{ ennemi_webapp_service }}"
+    enabled: true
+    state: "{{ 'started' if ennemi_webapp_entry_stat.stat.exists else omit }}"
+    daemon_reload: true
+  become: true
+
+- name: Apply any pending restart
+  ansible.builtin.meta: flush_handlers
+
+# A real request rather than `systemctl is-active`: listing the spectacles reads
+# content/spectacles relative to the working directory, so a 200 proves the
+# service came up in the right place, not merely that the port is open.
+- name: Check that the webapp answers
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ ennemi_webapp_port }}/api/spectacles"
+  register: ennemi_webapp_check
+  until: ennemi_webapp_check.status == 200
+  retries: 5
+  delay: 2
+  when:
+    - ennemi_webapp_entry_stat.stat.exists
+    - not ansible_check_mode
+
+- name: Report the webapp
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {% if ennemi_webapp_check is not skipped -%}
+      {{ ennemi_webapp_service }} answering on 127.0.0.1:{{ ennemi_webapp_port }},
+      serving {{ ennemi_webapp_dir }}.
+      {%- elif ennemi_webapp_entry_stat.stat.exists -%}
+      {{ ennemi_webapp_service }} enabled (not checked under --check).
+      {%- else -%}
+      {{ ennemi_webapp_service }} enabled, waiting for its build: run `make deploy`
+      in the webapp repository to push it.
+      {%- endif %}

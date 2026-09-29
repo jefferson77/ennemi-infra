@@ -7,8 +7,8 @@
 # asked for here and every security release of it through apt -- which
 # roles/common's dist-upgrade then keeps current, like any other package.
 #
-# Keep this on the major in ennemi-web's .nvmrc: that project's server/ is what
-# runs on it.
+# Keep this on the major in the .nvmrc of both projects that run on it:
+# ennemi-web's server/ (ennemi-vps) and the webapp's build (ennemi-brain).
 nodejs_major: 24
 
 nodejs_apt_key_url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key

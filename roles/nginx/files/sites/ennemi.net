@@ -217,8 +217,10 @@ server {
     # ========================================
     # Serve hashed static files directly from disk (not proxied)
     # nginx will automatically serve .br or .gz files if available
+    # The build is pushed here from ennemi-dev by the webapp's `make deploy`
+    # (roles/ennemi_webapp owns the directory).
     location /_nuxt/ {
-        alias /home/ennemi/webapp/.output/public/_nuxt/;
+        alias /var/www/webapp/.output/public/_nuxt/;
 
         # Cache for 1 year (hashed filenames = immutable)
         add_header Cache-Control "public, max-age=31536000, immutable" always;
@@ -240,16 +242,18 @@ server {
     # ========================================
     # UPLOADED ASSETS - Served from public/
     # ========================================
-    # These are uploaded via Asset Manager, not built by Nuxt
+    # These are uploaded via Asset Manager, not built by Nuxt: the service
+    # writes them into /var/www/webapp/public at runtime, beside the copies
+    # the webapp's `make deploy` syncs from git.
     location /images/ {
-        alias /home/ennemi/webapp/public/images/;
+        alias /var/www/webapp/public/images/;
         add_header Cache-Control "public, max-age=86400" always;
         add_header X-Content-Type-Options "nosniff" always;
         try_files $uri =404;
     }
 
     location /audio/ {
-        alias /home/ennemi/webapp/public/audio/;
+        alias /var/www/webapp/public/audio/;
         add_header Cache-Control "public, max-age=86400" always;
         add_header X-Content-Type-Options "nosniff" always;
         try_files $uri =404;

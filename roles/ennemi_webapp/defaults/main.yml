@@ -1,0 +1,48 @@
+---
+# ennemi-webapp: the show app (User phones, Control desk, Stage display) on
+# ennemi-brain, behind the ennemi.net nginx site.
+#
+# The split with the webapp project mirrors ennemi-web's:
+#
+#   here     the directory, the unit, Node
+#   webapp   everything inside the directory -- its `make deploy` builds on
+#            ennemi-dev, rsyncs the build and the show content in, then
+#            restarts the unit
+#
+# Unlike ennemi-web-api, the service also *writes* inside that directory: the
+# Control desk's Edit Spectacle and Asset Manager tabs save to content/,
+# public/ and raw_assets/ at runtime. Hence a real account that owns the
+# directory rather than a DynamicUser, and the webapp deploy's guard against
+# overwriting edits made in production.
+
+ennemi_webapp_service: ennemi-webapp
+ennemi_webapp_unit_file: "/etc/systemd/system/{{ ennemi_webapp_service }}.service"
+
+# Must match WEBAPP_PATH in the webapp's scripts/deploy.sh, and the aliases in
+# roles/nginx/files/sites/ennemi.net.
+ennemi_webapp_dir: /var/www/webapp
+ennemi_webapp_entry: "{{ ennemi_webapp_dir }}/.output/server/index.mjs"
+
+# The directories the server resolves against its working directory and writes
+# to at runtime. Created here so ReadWritePaths= in the unit names paths that
+# exist -- systemd refuses to start the service otherwise.
+ennemi_webapp_writable_dirs:
+  - content
+  - public
+  - raw_assets
+
+# Owns the directory and runs the service. The same account the deploy rsyncs
+# as, so neither side needs sudo to write there.
+ennemi_webapp_user: ennemi
+ennemi_webapp_group: ennemi
+
+# nginx proxies to it on localhost; must match proxy_pass in the ennemi.net site.
+ennemi_webapp_port: 3000
+
+# nuxt.config.ts computes networkIp from the interfaces of whichever machine
+# runs `nuxt build`, which is now ennemi-dev. Overridden at runtime with the
+# address of the host actually serving the show, as it was when brain built
+# itself.
+ennemi_webapp_network_ip: "{{ ansible_facts['default_ipv4']['address'] | default('') }}"
+
+ennemi_webapp_node: /usr/bin/node

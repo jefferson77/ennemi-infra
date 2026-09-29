@@ -5,14 +5,21 @@
 ansible_user: ennemi
 
 # nginx: the sites this host already serves, copied into the repo as they were
-# found on disk. The certificates they reference stay on the host (letsencrypt
-# for ennemi.net, /etc/nginx/ssl for dev.ennemi.net) and are not managed here.
+# found on disk -- ennemi.net since repointed at /var/www/webapp, where the
+# webapp's `make deploy` now puts the build (roles/ennemi_webapp). The
+# certificates they reference stay on the host (letsencrypt for ennemi.net,
+# /etc/nginx/ssl for dev.ennemi.net) and are not managed here.
 nginx_sites:
   - ennemi.net
   - dev.ennemi.net
 
 nginx_conf_d:
   - stub_status.conf
+
+# The ennemi.net site serves the webapp's pre-compressed build with
+# brotli_static, a fatal `nginx -t` error without the brotli modules. They were
+# installed by hand here; listing them keeps a rebuilt host startable.
+nginx_brotli: true
 
 # DNS on this host belongs to AdGuard Home, which listens on *:53 and has the
 # systemd-resolved stub disabled to keep that port free. tailscaled must not
