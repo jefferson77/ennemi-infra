@@ -285,20 +285,20 @@ roles/nginx/files/conf.d/    -> /etc/nginx/conf.d/
 
 | Host           | `nginx_sites`                        | `nginx_tls_sites`   | `nginx_stream_sites` | `nginx_conf_d`     |
 |----------------|--------------------------------------|---------------------|----------------------|--------------------|
-| `ennemi-brain` | `ennemi.net`, `dev.ennemi.net`       | —                   | —                    | `stub_status.conf` |
-
-`ennemi-brain` also sets `nginx_brotli: true`: `ennemi.net` serves the webapp's pre-compressed
-build with `brotli_static`.
+| `ennemi-brain` | `ennemi.net`                         | —                   | —                    | `stub_status.conf` |
 | `ennemi-vps`   | `vps-placeholder`, `ennemi-web`  | `ennemi-web-tls`| —                    | —                  |
 | `ennemi-dev`   | `ennemi.net-edge`                    | —                   | `ennemi.net-tls`     | —                  |
 
-`ennemi-brain`'s two files were copied off the running host byte for byte. `ennemi.net` has
+`ennemi-brain` also sets `nginx_brotli: true`: `ennemi.net` serves the webapp's pre-compressed
+build with `brotli_static`.
+
+`ennemi-brain`'s site was copied off the running host byte for byte. `ennemi.net` has
 since been repointed from `/home/ennemi/webapp` to `/var/www/webapp` (its `/_nuxt/`,
 `/images/` and `/audio/` aliases), where the webapp's `make deploy` now puts the build — see
 *The `ennemi_webapp` role*. It also answers on `internal.ennemi.net`, a LAN-only name for
 development: the venue router resolves it to `ennemi-brain`, the edge on `ennemi-dev` does not
 forward it, and the letsencrypt lineage `www.ennemi.net` was expanded by hand (`dns-ovh`) to
-cover it. `dev.ennemi.net` is still the copy as found.
+cover it.
 
 ### Sites that need a certificate (`nginx_tls_sites`)
 
@@ -550,8 +550,8 @@ The role deliberately does **not** manage:
   top-level sibling of `http`, so unlike `conf.d` and `sites-enabled` there is
   no packaged include point to drop it into.
 - **certificates and keys**, on `ennemi-brain` and `ennemi-dev`. The site
-  configs there reference `/etc/letsencrypt/live/www.ennemi.net/` and
-  `/etc/nginx/ssl/`, which stay on the host and are renewed as they always were.
+  configs there reference `/etc/letsencrypt/live/www.ennemi.net/`, which stays on
+  the host and is renewed as it always was.
   Nothing secret is in this repo, and a host that lacks those files cannot serve
   those sites — which is what `nginx_tls_sites` turns from a failed play into a
   skipped site. On `ennemi-vps` the certificate *is* managed, by the

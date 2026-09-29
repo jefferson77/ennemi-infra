@@ -7,13 +7,13 @@ ansible_user: ennemi
 # nginx: the sites this host already serves, copied into the repo as they were
 # found on disk -- ennemi.net since repointed at /var/www/webapp, where the
 # webapp's `make deploy` now puts the build (roles/ennemi_webapp). The
-# certificates they reference stay on the host (letsencrypt for ennemi.net,
-# /etc/nginx/ssl for dev.ennemi.net) and are not managed here. ennemi.net also
+# certificate it references stays on the host (letsencrypt) and is not managed
+# here. dev.ennemi.net, the staging site, was retired with its service on
+# 2026-09-29: the webapp is now developed on ennemi-dev. ennemi.net also
 # answers on internal.ennemi.net, a LAN-only name for development; the
 # letsencrypt lineage www.ennemi.net was expanded by hand to include it.
 nginx_sites:
   - ennemi.net
-  - dev.ennemi.net
 
 nginx_conf_d:
   - stub_status.conf
