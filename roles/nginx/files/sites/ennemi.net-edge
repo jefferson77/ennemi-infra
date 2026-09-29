@@ -1,0 +1,82 @@
+# Edge vhost for ennemi.net on ennemi-dev.
+#
+# Public DNS for ennemi.net and www.ennemi.net points at this site's public
+# address, but the web server itself lives on ennemi-brain. This file forwards
+# plain HTTP to it over the tailnet; the matching TLS half is a stream proxy,
+# not a server block here -- see streams/ennemi.net-tls.
+#
+# The address is ennemi-brain's tailscale IP, the same literal used for it in
+# inventory/hosts.yml. The IP rather than the MagicDNS name, so forwarding does
+# not also depend on DNS resolving on this host.
+upstream ennemi_brain_http {
+    server 100.86.27.113:80;
+    keepalive 16;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name www.ennemi.net ennemi.net;
+
+    access_log /var/log/nginx/ennemi.net-edge.access.log;
+    error_log  /var/log/nginx/ennemi.net-edge.error.log;
+
+    # No client_max_body_size limit of our own: whatever the application on
+    # ennemi-brain accepts is what gets accepted, decided in one place.
+    client_max_body_size 0;
+
+    location / {
+        proxy_pass http://ennemi_brain_http;
+        proxy_http_version 1.1;
+
+        # The name the client asked for, so ennemi-brain picks the right vhost
+        # and builds its redirects with the public hostname.
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+
+        # Passed through as it arrived, and NOT cleared. nginx omits a header
+        # whose value evaluates empty, so this sends the client's scheme when
+        # something in front told us, and nothing when it did not.
+        #
+        # ennemi-brain redirects to https only for a request carrying no
+        # X-Forwarded-Proto -- that is how it tells a real plain-HTTP client
+        # from one whose TLS a proxy already terminated. Both cases reach this
+        # port, so both have to survive it:
+        #
+        #   Caddy -> here      X-Forwarded-Proto: https, forwarded unchanged,
+        #                      brain serves the app.
+        #   plain client here  no header, nothing sent, brain 301s to https.
+        #
+        # Clearing it unconditionally is what caused ERR_TOO_MANY_REDIRECTS:
+        # the https clients arriving via Caddy lost the header, brain read them
+        # as plain HTTP and redirected them to the https they were already on.
+        # This machine is not the outermost edge -- Caddy is -- so "arrived on
+        # port 80" does not mean "arrived over plain HTTP".
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+        proxy_set_header Connection "";
+
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+
+        # Nothing is cached or rewritten here: this is a forwarder, and the
+        # application's own headers should reach the client unchanged.
+        proxy_buffering off;
+    }
+}
+
+# Everything else that reaches port 80 on this machine. Without it the vhost
+# above would be the default server and would forward any Host header at all to
+# ennemi-brain. 444 closes the connection without a response, which is the
+# usual answer for a public edge to a request that named a host it does not
+# serve.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    access_log off;
+    return 444;
+}

@@ -2,6 +2,17 @@
 # The development and deploy machine: it runs the playbooks itself, so there is
 # nothing to reach over the network and no login account to configure.
 
-# nginx: no site is served from this machine yet. Left empty rather than
-# omitted, so it is clear the stock default site is removed on purpose.
-nginx_sites: []
+# nginx: this host is the edge for ennemi.net. Public DNS for the domain points
+# at this site's address and the router forwards 80 and 443 here, but the web
+# server itself runs on ennemi-brain, so both ports are forwarded to it over
+# the tailnet.
+#
+# The two halves work differently and that is deliberate, see the header of
+# each file: port 80 is proxied at the HTTP layer, port 443 is passed through
+# untouched at the TCP layer so ennemi-brain keeps serving its own letsencrypt
+# certificate and this machine needs no key of its own.
+nginx_sites:
+  - ennemi.net-edge
+
+nginx_stream_sites:
+  - ennemi.net-tls

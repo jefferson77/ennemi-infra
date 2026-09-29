@@ -7,8 +7,52 @@
   environment:
     DEBIAN_FRONTEND: noninteractive
 
-# nginx.conf itself is left alone: on ennemi-brain it is byte-identical to the
-# packaged conffile, so the distribution stays in charge of it.
+# The stream context is a dynamic module on Ubuntu, not part of the nginx
+# package. Installing it drops a load_module line in modules-enabled/, which
+# nginx.conf already includes. Only for a host that asked for a stream config:
+# nothing else needs the module, and this keeps ennemi-brain untouched.
+- name: Install the stream module
+  ansible.builtin.apt:
+    name: libnginx-mod-stream
+    state: present
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when: nginx_stream_sites | length > 0
+  notify: Reload nginx
+
+- name: Create the stream configuration directories
+  ansible.builtin.file:
+    path: "/etc/nginx/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  loop:
+    - streams-available
+    - streams-enabled
+  when: nginx_stream_sites | length > 0
+
+# nginx.conf itself is otherwise left alone: on ennemi-brain it is
+# byte-identical to the packaged conffile, so the distribution stays in charge
+# of it. The one exception is this block, and only on a host with a stream
+# config to serve. It has to go here because `stream` is a top-level context,
+# a sibling of `http` -- there is no packaged include point for it the way
+# conf.d and sites-enabled are include points inside `http`.
+- name: Add the stream include to nginx.conf
+  ansible.builtin.blockinfile:
+    path: /etc/nginx/nginx.conf
+    marker: "# {mark} ANSIBLE MANAGED BLOCK: stream"
+    block: |
+      stream {
+          include /etc/nginx/streams-enabled/*;
+      }
+    validate: nginx -t -c %s
+  become: true
+  when: nginx_stream_sites | length > 0
+  notify: Reload nginx
+
 - name: Deploy the conf.d fragments
   ansible.builtin.copy:
     src: "conf.d/{{ item }}"
@@ -38,6 +82,26 @@
     state: link
   become: true
   loop: "{{ nginx_sites }}"
+  notify: Reload nginx
+
+- name: Deploy the stream configurations
+  ansible.builtin.copy:
+    src: "streams/{{ item }}"
+    dest: "/etc/nginx/streams-available/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  loop: "{{ nginx_stream_sites }}"
+  notify: Reload nginx
+
+- name: Enable the stream configurations
+  ansible.builtin.file:
+    src: "/etc/nginx/streams-available/{{ item }}"
+    dest: "/etc/nginx/streams-enabled/{{ item }}"
+    state: link
+  become: true
+  loop: "{{ nginx_stream_sites }}"
   notify: Reload nginx
 
 - name: Disable the stock default site

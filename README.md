@@ -237,25 +237,90 @@ host gets is declared in `inventory/host_vars/`, and the files themselves live
 in the role:
 
 ```
-roles/nginx/files/sites/     -> /etc/nginx/sites-available/ (then symlinked)
+roles/nginx/files/sites/     -> /etc/nginx/sites-available/   (then symlinked)
+roles/nginx/files/streams/   -> /etc/nginx/streams-available/ (then symlinked)
 roles/nginx/files/conf.d/    -> /etc/nginx/conf.d/
 ```
 
-| Host           | `nginx_sites`                   | `nginx_conf_d`     |
-|----------------|---------------------------------|--------------------|
-| `ennemi-brain` | `ennemi.net`, `dev.ennemi.net` | `stub_status.conf` |
-| `ennemi-vps`   | `vps-placeholder`              | —                  |
-| `ennemi-dev`   | — (stock default site removed)  | —                  |
+| Host           | `nginx_sites`                  | `nginx_stream_sites` | `nginx_conf_d`     |
+|----------------|--------------------------------|----------------------|--------------------|
+| `ennemi-brain` | `ennemi.net`, `dev.ennemi.net` | —                    | `stub_status.conf` |
+| `ennemi-vps`   | `vps-placeholder`              | —                    | —                  |
+| `ennemi-dev`   | `ennemi.net-edge`              | `ennemi.net-tls`     | —                  |
 
 `ennemi-brain`'s two files were copied off the running host byte for byte, so
 applying the role there reports `changed=0` and never reloads it. The VPS gets
 a placeholder default server instead: `200` on `/healthz`, `204` everywhere
 else, to be replaced when it has a real job.
 
+### The ennemi.net edge on `ennemi-dev`
+
+Public DNS for `ennemi.net` and `www.ennemi.net` points at this site's address,
+but the web server is on `ennemi-brain`. `ennemi-dev` forwards to it over the
+tailnet, and the two ports it listens on are handled at different layers on
+purpose.
+
+**There is another proxy in front.** A Caddy at `192.168.110.5` holds the
+public 80 and 443, terminates TLS itself, and forwards to `ennemi-dev:80` over
+plain HTTP with `X-Forwarded-Proto: https`. So in practice public traffic
+arrives here on **port 80 already decrypted**, and this machine is the middle
+of a three-hop chain, not the outermost edge:
+
+```
+client -> Caddy 192.168.110.5 (terminates TLS) -> ennemi-dev:80 -> ennemi-brain:80
+```
+
+Port 443 here is for clients that reach this box directly instead — a LAN
+client whose DNS points at it, or the public path if Caddy is ever taken out.
+
+| Port | Layer | File | What reaches `ennemi-brain` |
+|------|-------|------|-----------------------------|
+| 80  | HTTP (`http` context)   | `sites/ennemi.net-edge` | A proxied request with `Host`, `X-Real-IP` and `X-Forwarded-For` |
+| 443 | TCP (`stream` context)  | `streams/ennemi.net-tls` | The bytes of the connection, untouched |
+
+**443 is passed through, not terminated.** `ennemi-dev` holds no certificate
+for the domain and needs none: it reads the SNI name out of the opening
+handshake (`ssl_preread`, which requires no key) and copies the connection to
+`ennemi-brain`, which completes the handshake with its own letsencrypt
+certificate and renews it exactly as before. Only `ennemi.net` and
+`www.ennemi.net` are forwarded; any other SNI, and a connection with no SNI,
+maps to an empty upstream and is dropped. The price is the client's address:
+`ennemi-brain` sees `ennemi-dev`'s tailscale IP as the peer, and at that layer
+there is no header to record the real one in.
+
+**80 forwards `X-Forwarded-Proto` exactly as it arrived.** `ennemi-brain`'s
+`ennemi.net` config redirects to https only for a request carrying no
+`X-Forwarded-Proto` — that is how it tells a genuine plain-HTTP client from one
+whose TLS a proxy already terminated, and getting it wrong is what caused the
+redirect loop documented at the top of that file. Both kinds of client reach
+port 80 here, so both have to survive the hop:
+
+| Arrives on port 80 with | Sent to brain | Brain answers |
+|---|---|---|
+| `X-Forwarded-Proto: https` (from Caddy) | unchanged | the app, `200` |
+| no such header (direct plain-HTTP client) | nothing — nginx omits an empty header | `301` to https |
+
+`proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;` gives both rows,
+because nginx drops a header whose value evaluates empty.
+
+Setting it to `""` unconditionally instead — on the reasoning that nothing is
+terminated *here*, so port 80 must mean plain HTTP — is what produced a live
+`ERR_TOO_MANY_REDIRECTS`: it stripped the header off the Caddy-terminated https
+clients, brain read them as plain HTTP and redirected them to the https they
+were already using. "Arrived on port 80" does not mean "arrived over plain
+HTTP" when something in front terminated TLS.
+
+A `server` that does not name one of the two hostnames answers `444` and closes.
+
 The role deliberately does **not** manage:
 
-- **`nginx.conf`** — on `ennemi-brain` it is identical to the packaged
-  conffile, so the distribution stays in charge of it.
+- **`nginx.conf`**, with one exception — on `ennemi-brain` and `ennemi-vps` it
+  is identical to the packaged conffile, so the distribution stays in charge of
+  it. A host with a non-empty `nginx_stream_sites` gets one managed block
+  appended, opening a `stream` context that includes `streams-enabled/`, plus
+  the `libnginx-mod-stream` package that provides the context. `stream` is a
+  top-level sibling of `http`, so unlike `conf.d` and `sites-enabled` there is
+  no packaged include point to drop it into.
 - **certificates and keys.** The site configs reference
   `/etc/letsencrypt/live/www.ennemi.net/` and `/etc/nginx/ssl/`, which stay on
   the host. Nothing secret is in this repo, and a host that lacks those files

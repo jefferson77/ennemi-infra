@@ -7,6 +7,17 @@ nginx_sites: []
 # Fragments copied to /etc/nginx/conf.d/, from roles/nginx/files/conf.d/.
 nginx_conf_d: []
 
+# Stream (layer 4 TCP/UDP) configurations, by file name, from
+# roles/nginx/files/streams/. The same available/enabled pair as the sites
+# above, in /etc/nginx/streams-available and /etc/nginx/streams-enabled.
+#
+# These are NOT site configs: they live in nginx's `stream` context, not
+# `http`, so they cannot be dropped into sites-available. A host that names
+# one here gets the stream module installed and a `stream` block added to
+# nginx.conf to include them; a host with an empty list is left exactly as it
+# is today, nginx.conf included.
+nginx_stream_sites: []
+
 # Remove the stock "default" site nginx enables on install, so the sites listed
 # above are the only ones served.
 nginx_disable_default_site: true

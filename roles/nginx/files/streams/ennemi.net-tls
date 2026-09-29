@@ -1,0 +1,54 @@
+# TLS for ennemi.net on ennemi-dev, passed straight through to ennemi-brain.
+#
+# This machine holds no certificate for ennemi.net and should not: the
+# letsencrypt material lives on ennemi-brain and is renewed there. So port 443
+# is not terminated here at all. nginx reads only the SNI name out of the
+# opening handshake (ssl_preread, which needs no key) and then copies the
+# bytes of the connection to ennemi-brain, which completes the TLS handshake
+# with its own certificate and sees an ordinary HTTPS client.
+#
+# The cost of passing through rather than terminating is the client's address:
+# ennemi-brain sees this machine's tailscale IP as the peer, and there is no
+# X-Forwarded-For to add, because at this layer there is nothing to add it to.
+# Sending PROXY protocol instead would fix that but requires ennemi-brain's
+# 443 listener to expect it, which would break every other client of that
+# port, so it is left alone.
+
+log_format ennemi_tls '$remote_addr [$time_local] $protocol $status '
+                      '$bytes_sent/$bytes_received in ${session_time}s '
+                      'sni="$ssl_preread_server_name" -> "$upstream_addr"';
+
+# ennemi-brain's tailscale IP, the same literal used for it in
+# inventory/hosts.yml -- see the note in sites/ennemi.net-edge.
+upstream ennemi_brain_tls {
+    server 100.86.27.113:443;
+}
+
+# Only the two names asked for are forwarded. An empty upstream is not a valid
+# destination, so any other SNI -- and a connection with no SNI at all -- fails
+# to connect and is dropped, which is what should happen to a name this edge
+# does not serve.
+map $ssl_preread_server_name $ennemi_tls_upstream {
+    www.ennemi.net  ennemi_brain_tls;
+    ennemi.net      ennemi_brain_tls;
+    default         "";
+}
+
+server {
+    listen 443;
+    listen [::]:443;
+
+    ssl_preread on;
+    proxy_pass $ennemi_tls_upstream;
+
+    access_log /var/log/nginx/ennemi.net-tls.access.log ennemi_tls;
+    error_log  /var/log/nginx/ennemi.net-tls.error.log;
+
+    proxy_connect_timeout 5s;
+
+    # Long-lived connections are normal here: the site behind this proxy
+    # carries websockets and a video stream, and a stream proxy cannot tell
+    # them from an idle HTTP keepalive. Ten minutes of silence before the
+    # connection is reclaimed.
+    proxy_timeout 10m;
+}
