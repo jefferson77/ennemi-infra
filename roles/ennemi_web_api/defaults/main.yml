@@ -1,0 +1,33 @@
+---
+# ennemi-web-api: the one application on ennemi-vps. It stores whether a show
+# is running, which decides what www.ennemi.net/ shows, and is switched by the
+# show app on ennemi-brain and by the site's /admin/ page.
+#
+# The split with the ennemi-web project mirrors the web root's:
+#
+#   here         the directory, the unit, its state directory
+#   ennemi-web   the code in the directory *and* the .env beside it that holds
+#                the secrets -- its `make deploy` rsyncs both, then restarts
+#                the unit
+#
+# So this role creates an empty directory and a unit that waits for it to be
+# filled, and holds no secret at all.
+
+ennemi_web_api_service: ennemi-web-api
+ennemi_web_api_unit_file: "/etc/systemd/system/{{ ennemi_web_api_service }}.service"
+
+# Must match API_PATH in ennemi-web's scripts/deploy.sh.
+ennemi_web_api_dir: /opt/ennemi-web-api
+ennemi_web_api_entry: "{{ ennemi_web_api_dir }}/index.js"
+ennemi_web_api_env_file: "{{ ennemi_web_api_dir }}/.env"
+
+# Loopback only: nginx is the one client, on the same host. The port must match
+# the proxy_pass in the nginx sites and API_HEALTH in ennemi-web's deploy.sh.
+ennemi_web_api_host: 127.0.0.1
+ennemi_web_api_port: 8787
+
+# Under /var/lib, created and owned by systemd (StateDirectory=), never by the
+# deploy: that directory is rsynced with --delete.
+ennemi_web_api_state_directory: ennemi-web-api
+
+ennemi_web_api_node: /usr/bin/node

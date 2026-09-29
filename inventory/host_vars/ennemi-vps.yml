@@ -16,9 +16,14 @@ ansible_user: ubuntu
 # vps-placeholder stays: it owns `listen 80 default_server` and answers for any
 # other name that reaches this machine. Dropping it would leave a stale symlink
 # on the host, which the role does not clean up.
+#
+# ennemi-web-tailnet serves the same site and API under this host's MagicDNS
+# name, to tailnet addresses only: it is how the show app on ennemi-brain, where
+# www.ennemi.net resolves to brain itself, reaches the live-state API.
 nginx_sites:
   - vps-placeholder
   - ennemi-web
+  - ennemi-web-tailnet
 
 nginx_tls_sites:
   - name: ennemi-web-tls
@@ -29,6 +34,11 @@ nginx_tls_sites:
 # stay with the ennemi account that deploys into it, not with this repository.
 nginx_webroots:
   - /var/www/ennemi-web
+
+# The rate limit on writes to the live-state API (roles/ennemi_web_api), used
+# by the TLS site. http-context directives, hence conf.d rather than the site.
+nginx_conf_d:
+  - ennemi-web-api.conf
 
 # That build ships .br and .gz variants beside every text file, so the vhost
 # uses brotli_static and gzip_static to serve them straight from disk. Those

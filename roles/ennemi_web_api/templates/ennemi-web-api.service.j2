@@ -1,0 +1,53 @@
+# Managed by the ennemi infrastructure (roles/ennemi_web_api). The code in
+# {{ ennemi_web_api_dir }} and the .env beside it are pushed by the ennemi-web
+# project's `make deploy`, which restarts this unit afterwards.
+[Unit]
+Description=ennemi-web live-state API
+After=network.target
+# Enabled before the first code deploy, which is harmless: until the code is
+# there, starting the unit is a no-op rather than a failure.
+ConditionPathExists={{ ennemi_web_api_entry }}
+
+[Service]
+Type=simple
+ExecStart={{ ennemi_web_api_node }} {{ ennemi_web_api_entry }}
+WorkingDirectory={{ ennemi_web_api_dir }}
+# Secrets (SHOW_TOKEN, ADMIN_PASSWORD). Read by systemd, as root, before the
+# service starts, so the file can stay root-only. Deliberately not optional:
+# code without its secrets should fail to start, loudly, in the journal.
+EnvironmentFile={{ ennemi_web_api_env_file }}
+Environment=HOST={{ ennemi_web_api_host }}
+Environment=PORT={{ ennemi_web_api_port }}
+Environment=NODE_ENV=production
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier={{ ennemi_web_api_service }}
+
+# A throwaway user allocated at start, so there is no account to manage. The
+# state directory is created for it under /var/lib and handed to the service
+# as $STATE_DIRECTORY, which the code reads.
+DynamicUser=yes
+StateDirectory={{ ennemi_web_api_state_directory }}
+
+# Hardening. DynamicUser already implies ProtectSystem=strict, ProtectHome,
+# PrivateTmp, NoNewPrivileges and RemoveIPC. No MemoryDenyWriteExecute: V8's
+# JIT needs writable executable memory.
+CapabilityBoundingSet=
+PrivateDevices=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,85 @@
+---
+- name: Check that Node.js is installed
+  ansible.builtin.stat:
+    path: "{{ ennemi_web_api_node }}"
+  register: ennemi_web_api_node_stat
+  become: true
+
+- name: Fail early without Node.js
+  ansible.builtin.assert:
+    that: ennemi_web_api_node_stat.stat.exists
+    fail_msg: >-
+      {{ inventory_hostname }} has no {{ ennemi_web_api_node }}. The nodejs role
+      installs it, and runs before this one in playbooks/site.yml:
+      ./deploy {{ inventory_hostname }} --tags=nodejs,ennemi_web_api
+    quiet: true
+  when: not ansible_check_mode
+
+# Existence only: no owner, group or mode, exactly as nginx_webroots does for
+# the web root. The directory is written by ennemi-web's deploy (rsync under
+# sudo), and asserting an owner here would fight what that brings with it on
+# every run. A new directory is created root-owned, which is what the service
+# needs: it only reads it.
+- name: Create the code directory
+  ansible.builtin.file:
+    path: "{{ ennemi_web_api_dir }}"
+    state: directory
+  become: true
+
+- name: Look for deployed code
+  ansible.builtin.stat:
+    path: "{{ ennemi_web_api_entry }}"
+  register: ennemi_web_api_entry_stat
+  become: true
+
+- name: Deploy the service unit
+  ansible.builtin.template:
+    src: ennemi-web-api.service.j2
+    dest: "{{ ennemi_web_api_unit_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: Restart ennemi-web-api
+
+# daemon_reload here rather than in a handler, as in the dragonfly role. Before
+# the first code deploy `started` is a no-op -- ConditionPathExists skips it --
+# so it is only asked for once there is something to start.
+- name: Enable ennemi-web-api
+  ansible.builtin.systemd_service:
+    name: "{{ ennemi_web_api_service }}"
+    enabled: true
+    state: "{{ 'started' if ennemi_web_api_entry_stat.stat.exists else omit }}"
+    daemon_reload: true
+  become: true
+
+- name: Apply any pending restart
+  ansible.builtin.meta: flush_handlers
+
+# A real request rather than `systemctl is-active`: it proves the port is open
+# and the code came up with its secrets. Retried, since a restart takes a moment.
+- name: Check that the API answers
+  ansible.builtin.uri:
+    url: "http://{{ ennemi_web_api_host }}:{{ ennemi_web_api_port }}/api/live"
+    return_content: true
+  register: ennemi_web_api_check
+  until: ennemi_web_api_check.status == 200
+  retries: 5
+  delay: 2
+  when:
+    - ennemi_web_api_entry_stat.stat.exists
+    - not ansible_check_mode
+
+- name: Report the API
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {% if ennemi_web_api_check is not skipped -%}
+      {{ ennemi_web_api_service }} answering on {{ ennemi_web_api_host }}:{{ ennemi_web_api_port }},
+      live={{ ennemi_web_api_check.json.live }}.
+      {%- elif ennemi_web_api_entry_stat.stat.exists -%}
+      {{ ennemi_web_api_service }} enabled (not checked under --check).
+      {%- else -%}
+      {{ ennemi_web_api_service }} enabled, waiting for its code: run `make deploy`
+      in ennemi-web to push it.
+      {%- endif %}

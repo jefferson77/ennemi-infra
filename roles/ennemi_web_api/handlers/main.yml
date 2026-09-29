@@ -1,0 +1,12 @@
+---
+# The unit is reloaded by the enable task rather than here, as in the dragonfly
+# role: a brand-new unit has to be known to systemd before it can be enabled.
+#
+# Only once the code is there: before the first ennemi-web deploy, a restart
+# would just be skipped by ConditionPathExists anyway.
+- name: Restart ennemi-web-api
+  ansible.builtin.systemd_service:
+    name: "{{ ennemi_web_api_service }}"
+    state: restarted
+  become: true
+  when: ennemi_web_api_entry_stat.stat.exists | default(false)

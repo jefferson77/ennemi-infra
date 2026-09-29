@@ -51,6 +51,18 @@
     - role: postgres
       tags: [postgres]
 
+# ennemi-web's live-state API, on the VPS only. Node first: the service runs
+# on it. The code and its .env are pushed by ennemi-web's `make deploy`; this
+# play provides everything around them.
+- name: Apply the web API
+  hosts: web_api
+  gather_facts: true
+  roles:
+    - role: nodejs
+      tags: [nodejs]
+    - role: ennemi_web_api
+      tags: [ennemi_web_api]
+
 # The development machine gets one extra role. A separate play scoped to the
 # "dev" group, rather than a `when:` on the role, so the role never has to know
 # which host it is running on and `./deploy dev` reads the same as the rest.

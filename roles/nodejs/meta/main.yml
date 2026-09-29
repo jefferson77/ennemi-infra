@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: nodejs
+  author: nico
+  description: Node.js from NodeSource's apt repository, pinned to one major line.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

@@ -1,0 +1,95 @@
+---
+- name: Install the repository prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+    state: present
+  become: true
+
+# Same reasoning as the docker role: apt wants amd64 where the fact says x86_64.
+- name: Read the apt architecture
+  ansible.builtin.command: dpkg --print-architecture
+  register: nodejs_dpkg_arch
+  changed_when: false
+  check_mode: false   # read-only, must run so --check sees the real value
+
+- name: Create the keyring directory
+  ansible.builtin.file:
+    path: "{{ nodejs_apt_keyring | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Install NodeSource's signing key
+  ansible.builtin.get_url:
+    url: "{{ nodejs_apt_key_url }}"
+    dest: "{{ nodejs_apt_keyring }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+# "nodistro" is NodeSource's one suite for every Debian-family release: the
+# packages are built against a baseline old enough for all of them, so there is
+# no per-release suite to keep in step with the Ubuntu version.
+- name: Configure NodeSource's apt repository
+  ansible.builtin.deb822_repository:
+    name: nodesource
+    types: [deb]
+    uris: "{{ nodejs_apt_uri }}"
+    suites: [nodistro]
+    components: [main]
+    architectures: ["{{ nodejs_dpkg_arch.stdout }}"]
+    signed_by: "{{ nodejs_apt_keyring }}"
+    enabled: true
+    state: present
+  become: true
+
+- name: Prefer NodeSource's nodejs over Ubuntu's
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/nodesource
+    content: |
+      # Managed by the ennemi infrastructure (roles/nodejs).
+      Package: nodejs
+      Pin: origin deb.nodesource.com
+      Pin-Priority: {{ nodejs_apt_pin_priority }}
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Install Node.js
+  ansible.builtin.apt:
+    name: nodejs
+    state: present
+    update_cache: true
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Read the installed version
+  ansible.builtin.command: node --version
+  register: nodejs_version_output
+  changed_when: false
+  check_mode: false   # read-only, must run so --check knows what it compares to
+  failed_when: false
+
+# A host that already had Ubuntu's nodejs from another major would keep it:
+# `state: present` does not upgrade. Say so rather than leave a service running
+# on the wrong major.
+- name: Check that the major version is the one asked for
+  ansible.builtin.assert:
+    that: nodejs_version_output.stdout is match('v' ~ nodejs_major ~ '\.')
+    fail_msg: >-
+      {{ inventory_hostname }} runs Node {{ nodejs_version_output.stdout | default('(none)', true) }},
+      not {{ nodejs_major }}.x. Remove the other nodejs package
+      (`sudo apt remove nodejs`) and run this role again.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Report the installed Node.js
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: Node.js {{ nodejs_version_output.stdout | default('not installed yet', true) }}."

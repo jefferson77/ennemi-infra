@@ -125,10 +125,11 @@ server {
 
     # ------------------------------------------------------------- the site
     #
-    # The build that is already on this host: the landing page at / and the
-    # standalone /morceau trailer. Static files only -- nothing here runs an
-    # application, and the show app stays on ennemi-brain inside the venue
-    # network, not reachable through this site.
+    # The build that is already on this host: the landing page at /, the
+    # standalone /morceau trailer and the /admin page. Static files, plus one
+    # small API under /api/ (ennemi-web-api, roles/ennemi_web_api) that stores
+    # whether a show is running. The show app itself stays on ennemi-brain
+    # inside the venue network, not reachable through this site.
     #
     # The content is pushed by the ennemi-web project, whose scripts/deploy.sh
     # builds and then `rsync -az --delete --rsync-path="sudo rsync"` into this
@@ -155,9 +156,36 @@ server {
         return 200 "ok\n";
     }
 
-    # morceau/index.html only resolves with the trailing slash.
+    # morceau/index.html and admin/index.html only resolve with the trailing
+    # slash.
     location = /morceau {
         return 308 /morceau/$is_args$args;
+    }
+
+    location = /admin {
+        return 308 /admin/$is_args$args;
+    }
+
+    # The live-state API, on the loopback only (roles/ennemi_web_api). It sets
+    # its own Cache-Control: no-store, so nothing is added here but the
+    # security headers. Writes are rate-limited (conf.d/ennemi-web-api.conf)
+    # and answered 429 past the limit, which the /admin page tells apart.
+    location /api/ {
+        limit_req zone=ennemi_web_api burst=5 nodelay;
+        limit_req_status 429;
+        client_max_body_size 1k;
+
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
     }
 
     # Hashed file names from the Vite build (main-BUCDZv5v.css and friends):

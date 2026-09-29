@@ -1,0 +1,71 @@
+# ennemi.net on ennemi-vps, for the tailnet: the same site and API as
+# sites/ennemi-web-tls, under the host's MagicDNS name, over plain HTTP.
+#
+# This is how the show app on ennemi-brain reaches the live-state API. On that
+# host www.ennemi.net resolves to brain itself (the venue router's internal
+# records), so it cannot use the public name; it calls
+#
+#   PUT http://ennemi-vps/api/live
+#
+# instead, and the /admin page answers at http://ennemi-vps/admin/ as well.
+#
+# Plain HTTP on purpose: there is no public certificate for a MagicDNS name,
+# and tailnet traffic is already encrypted end to end by WireGuard. No HSTS
+# either, for the same reason.
+#
+# The allow/deny is what keeps it on the tailnet. Port 80 is open to the
+# internet (the ACME challenge needs it), and anyone can send
+# `Host: ennemi-vps`; only tailnet source addresses -- the CGNAT range
+# tailscale hands out, and its IPv6 prefix -- get past it. The server_name
+# match is what routes those requests here rather than to vps-placeholder's
+# default_server.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ennemi-vps ennemi-vps.tail21508.ts.net;
+
+    access_log /var/log/nginx/ennemi-web-tailnet.access.log;
+    error_log  /var/log/nginx/ennemi-web-tailnet.error.log;
+
+    allow 100.64.0.0/10;
+    allow fd7a:115c:a1e0::/48;
+    deny all;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    gzip_static on;
+    brotli_static on;
+
+    root /var/www/ennemi-web;
+    index index.html;
+    absolute_redirect off;
+
+    location = /morceau {
+        return 308 /morceau/$is_args$args;
+    }
+
+    location = /admin {
+        return 308 /admin/$is_args$args;
+    }
+
+    # No rate limit here, unlike the public site: every client is on the
+    # tailnet already, and the show app may legitimately send a burst.
+    location /api/ {
+        client_max_body_size 1k;
+
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+    }
+
+    location / {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        try_files $uri $uri/ =404;
+    }
+}

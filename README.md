@@ -32,6 +32,8 @@ roles/nginx/             # nginx + the per-host site configs
 roles/certbot/           # Let's Encrypt certificates, obtained and renewed
 roles/dragonfly/         # Dragonfly (redis replacement), as a systemd service
 roles/postgres/          # PostgreSQL 18, from the Ubuntu archive
+roles/nodejs/            # Node.js from NodeSource, one major line (ennemi-vps)
+roles/ennemi_web_api/    # ennemi-web's live-state API, as a systemd service
 roles/dev/               # development-machine toolchain (ennemi-dev only)
 ```
 
@@ -350,6 +352,9 @@ The vhost is **two files**, and the split is the point:
 | 80  | `sites/ennemi-web`     | no  | `nginx_sites` |
 | 443 | `sites/ennemi-web-tls` | yes | `nginx_tls_sites` |
 
+A third file, `sites/ennemi-web-tailnet`, serves the same site and API under the
+host's MagicDNS name; see *The tailnet vhost* below.
+
 The plain-HTTP half names no key, so it comes up on a host that has never had a
 certificate — which is what lets certbot obtain the first one. It does exactly
 two things: serve `/.well-known/acme-challenge/` from `/srv/acme`,
@@ -377,11 +382,13 @@ nginx sites, the certificate and its renewal. The `ennemi-web` project owns the
 *contents* of the document root and nothing else. The two deploy independently
 and cannot collide:
 
-| | `ennemi-metal` (here) | `ennemi-web` |
+| | `ennemi-infra` (here) | `ennemi-web` |
 | --- | --- | --- |
 | `/var/www/ennemi-web` | creates it, never writes in it | owns everything inside it |
+| `/opt/ennemi-web-api` | creates it, never writes in it | owns everything inside it, `.env` included |
 | `/srv/acme` | owns — the ACME challenge webroot | cannot reach it |
 | nginx sites, TLS, certbot | owns | — |
+| Node, the `ennemi-web-api` unit, its state | owns | restarts the unit after a deploy |
 
 Two things enforce that rather than just describing it. The ACME challenge
 webroot is `/srv/acme`, outside `/var/www` altogether, so the content deploy's
@@ -391,11 +398,22 @@ web root — a host where `nginx_webroots` has not been applied gets a clear err
 instead of a site nothing is configured to serve.
 
 **What it serves** is the `ennemi-web` build already on the host — the landing
-page at `/` and the standalone `/morceau` trailer. Static files only; the show
-app stays on `ennemi-brain` inside the venue network and is not reachable
-through this site. The content is pushed by that project (`make deploy` rsyncs
-its `dist/` in) and is not managed here, ownership included — `nginx_webroots`
-only makes sure the directory exists.
+page at `/`, the standalone `/morceau` trailer and the `/admin` page — plus one
+small API under `/api/`, proxied to `ennemi-web-api` on `127.0.0.1:8787` (see
+*The `ennemi_web_api` role*). It stores whether a show is running, which decides
+what `/` shows. The show app itself stays on `ennemi-brain` inside the venue
+network and is not reachable through this site. The content is pushed by that
+project (`make deploy` rsyncs its `dist/` in) and is not managed here, ownership
+included — `nginx_webroots` only makes sure the directory exists.
+
+Writes to the API are rate-limited on the public site — ten a minute per client
+address, with a burst of five, answered `429` past it — because the `/admin`
+password is typed by a human and may be short, and `POST /api/admin/login` is
+the one endpoint that accepts it (the panel behind it works from an HttpOnly
+session cookie, not the password). Reads are never limited: every
+phone on the landing page polls `GET /api/live`. The `map` and `limit_req_zone`
+behind it are http-context directives, so they live in
+`conf.d/ennemi-web-api.conf` (`nginx_conf_d`), not in the site.
 
 Caching is per content type, so a deploy is visible immediately without giving
 up long-lived caching where it is free:
@@ -406,8 +424,8 @@ up long-lived caching where it is free:
 | `/images/`, `/morceau/video/`, `/morceau/audio/` | `max-age=86400` | stable names, rarely replaced |
 | everything else (HTML) | `no-cache` | revalidate, so a deploy shows up at once |
 
-`/morceau` without the trailing slash is a `308` to `/morceau/`, which is the
-only form that resolves.
+`/morceau` and `/admin` without the trailing slash are a `308` to the same path
+with a slash, which is the only form that resolves.
 
 **Compression is served from disk.** The build ships `.br` and `.gz` beside
 every text file, so the vhost sets `gzip_static`/`brotli_static` and nginx picks
@@ -424,10 +442,30 @@ Two details in that file worth keeping:
   `"ssl_stapling" ignored, no OCSP responder URL in the certificate` on every
   reload. `openssl x509 -noout -ocsp_uri -in fullchain.pem` prints nothing.
   The `resolver` line goes with it, so the VPS needs no DNS to serve the site.
-- **The security headers are repeated inside `location /assets/`.** `add_header`
+- **The security headers are repeated inside `location /assets/`** (and every
+  other location that sets a header, `/api/` included). `add_header`
   is not additive across blocks: a location that sets one of its own drops every
   header from the server block. Setting only `Cache-Control` there would quietly
   strip HSTS from every asset response.
+
+**The tailnet vhost.** On `ennemi-brain`, `www.ennemi.net` resolves to brain
+itself (the venue router's internal records), so the show app cannot reach the
+VPS by its public name. `sites/ennemi-web-tailnet` answers the MagicDNS names
+`ennemi-vps` and `ennemi-vps.tail21508.ts.net` on port 80 instead, with the same
+document root, the same `/api/` proxy (without the rate limit) and the same
+`/admin` page:
+
+```bash
+curl http://ennemi-vps/api/live                     # from any tailnet host
+```
+
+It is plain HTTP on purpose — there is no public certificate for a MagicDNS
+name, and WireGuard already encrypts tailnet traffic — so it sends no HSTS.
+**The `allow`/`deny` is what keeps it private**: port 80 is open to the internet
+for the ACME challenge, and anyone can send `Host: ennemi-vps`, so only the
+tailscale ranges (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) get past it; anything
+else gets `403`. The explicit `server_name` is what routes those requests here
+rather than to `vps-placeholder`'s `default_server`.
 
 ### The ennemi.net edge on `ennemi-dev`
 
@@ -841,6 +879,64 @@ The role deliberately does **not** manage:
 - **backups.** `pg_dump@.timer` ships with the packages, unused.
 
 Variables: see `roles/postgres/defaults/main.yml`.
+
+## The `nodejs` role
+
+Node.js on the hosts of the `web_api` group (the VPS), from
+[NodeSource](https://github.com/nodesource/distributions)'s apt repository —
+one repository per major line, so the host gets `nodejs_major` (24, the major in
+`ennemi-web`'s `.nvmrc`) and every security release of it through apt, which
+`common`'s dist-upgrade then keeps current. Ubuntu's own `nodejs` follows the
+distribution's freeze instead.
+
+An apt pin (`/etc/apt/preferences.d/nodesource`, priority 600) makes apt prefer
+NodeSource's package even where the archive carries a higher-numbered one. The
+role fails, with the command to fix it, on a host whose installed `node` is from
+another major: `state: present` would not replace it on its own.
+
+```bash
+./deploy ennemi-vps nodejs
+node --version
+```
+
+## The `ennemi_web_api` role
+
+`ennemi-web`'s live-state API: a few hundred lines of Node with no dependencies,
+which stores whether a show is running. The show app on `ennemi-brain` switches
+it (`PUT http://ennemi-vps/api/live`, over the tailnet vhost), `/admin` switches
+it by hand, and the landing page reads it to pick between the connection
+tutorial and a bare placeholder.
+
+| | |
+|---|---|
+| Code | `/opt/ennemi-web-api`, pushed by `ennemi-web`'s `make deploy` |
+| Secrets | `/opt/ennemi-web-api/.env`, root `0600`, pushed with the code |
+| Unit | `/etc/systemd/system/ennemi-web-api.service` |
+| Runs as | a `DynamicUser`, allocated at start — no account to manage |
+| State | `/var/lib/ennemi-web-api/state.json` (`StateDirectory=`) |
+| Listens | `127.0.0.1:8787` — nginx is the only client |
+
+**The split mirrors the web root's.** This role owns the directory, the unit and
+the state; `ennemi-web` owns the code *and its secrets*, and restarts the unit
+after each deploy. So the role creates an empty directory — existence only, as
+`nginx_webroots` does — and a unit with `ConditionPathExists` on the entry
+point, which is enabled straight away and simply does not start until the first
+code deploy fills it. **Nothing secret is in this repository or its `.env`**: the
+admin password and the show token are changed in `ennemi-web`'s `.env`, then
+`make deploy` there.
+
+The state lives under `/var/lib`, created by systemd, never in the code
+directory: that one is rsynced with `--delete`. The unit is hardened beyond what
+`DynamicUser` implies (no capabilities, no devices, kernel and cgroup
+protection, IPv4/IPv6/Unix sockets only); `systemd-analyze security` rates it
+`2.9 OK`. `MemoryDenyWriteExecute` is left off deliberately — V8's JIT needs it.
+
+```bash
+./deploy ennemi-vps --tags=nodejs,ennemi_web_api,nginx   # first time
+systemctl status ennemi-web-api
+journalctl -u ennemi-web-api        # one line per state change or refused write
+curl http://127.0.0.1:8787/api/live
+```
 
 ## The `dev` role
 
