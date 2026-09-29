@@ -1,0 +1,93 @@
+---
+# The sites of nginx_tls_sites, each deployed only once the certificate it names
+# is on the host. See the variable's comment in defaults/main.yml for why the
+# gate exists at all.
+#
+# A separate file because it runs twice on the deploy that first obtains a
+# certificate: once from main.yml, which finds nothing and says so, and again
+# from the certbot role, which includes this file after a successful issuance so
+# the site goes live in the same run instead of waiting for the next deploy.
+
+- name: Check which TLS certificates are on the host
+  ansible.builtin.stat:
+    path: "{{ item.certificate }}"
+  become: true
+  loop: "{{ nginx_tls_sites }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: nginx_tls_certificates
+  changed_when: false
+  check_mode: false
+
+# Split once, so the three tasks below read as lists rather than as the same
+# condition written out three times.
+- name: Sort the TLS sites by whether their certificate exists
+  ansible.builtin.set_fact:
+    nginx_tls_sites_ready: >-
+      {{ nginx_tls_certificates.results
+         | selectattr('stat.exists') | map(attribute='item') | list }}
+    nginx_tls_sites_waiting: >-
+      {{ nginx_tls_certificates.results
+         | rejectattr('stat.exists') | map(attribute='item') | list }}
+
+- name: Deploy the TLS site configurations
+  ansible.builtin.copy:
+    src: "sites/{{ item.name }}"
+    dest: "/etc/nginx/sites-available/{{ item.name }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  loop: "{{ nginx_tls_sites_ready }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify: Reload nginx
+
+- name: Enable the TLS site configurations
+  ansible.builtin.file:
+    src: "/etc/nginx/sites-available/{{ item.name }}"
+    dest: "/etc/nginx/sites-enabled/{{ item.name }}"
+    state: link
+    # force only bites in --check: the copy above writes nothing there, so a
+    # site being added for the first time has no source to link to and the
+    # module fails on a host that is otherwise perfectly fine. In a real run
+    # the file has just been copied, ansible_check_mode is false, and this
+    # behaves exactly as it always has.
+    force: "{{ ansible_check_mode }}"
+  become: true
+  loop: "{{ nginx_tls_sites_ready }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify: Reload nginx
+
+# Only the symlink, never sites-available: leaving the file itself in place
+# makes it obvious what is waiting, and an unlinked file is not read by nginx.
+- name: Disable the TLS sites whose certificate is missing
+  ansible.builtin.file:
+    path: "/etc/nginx/sites-enabled/{{ item.name }}"
+    state: absent
+  become: true
+  loop: "{{ nginx_tls_sites_waiting }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify: Reload nginx
+
+- name: Report the TLS sites still waiting for a certificate
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ item.name }} is not served —
+      {{ item.certificate }} does not exist yet. The certbot role fetches it,
+      and enables the site in the same run.
+  loop: "{{ nginx_tls_sites_waiting }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# main.yml validates the whole configuration at the end of the role, but this
+# file also runs from the certbot role, well after that task. Validate here too
+# so the second pass cannot reload a broken config into a live server either.
+- name: Validate the configuration after the TLS sites
+  ansible.builtin.command: nginx -t
+  become: true
+  changed_when: false
+  check_mode: false
+  when: nginx_tls_sites | length > 0

@@ -1,8 +1,14 @@
-# Placeholder default site for ennemi-vps.
+# Catch-all default site for ennemi-vps, on port 80.
 #
-# The VPS serves nothing real yet: this answers on port 80 so nginx has a
-# default server, and returns 204 for everything except a health probe.
-# Replace it with a proper site config when the VPS gets a job to do.
+# It began as a placeholder for a VPS that served nothing; now that the host is
+# the public edge for ennemi.net it keeps its job rather than being replaced.
+# It owns `listen 80 default_server`, so sites/ennemi-web does not have to
+# -- two default servers on one port is a fatal `nginx -t` error -- and it is
+# what answers a request naming some host this machine does not serve.
+#
+# 204 rather than the 444 the ennemi-dev edge returns: the /healthz probe below
+# is only useful if something is reliably listening, and a connection dropped
+# without a response is harder to tell from a host that is down.
 server {
     listen 80 default_server;
     listen [::]:80 default_server;

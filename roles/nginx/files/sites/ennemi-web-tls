@@ -1,0 +1,212 @@
+# Public edge for ennemi.net on ennemi-vps: the TLS half.
+#
+# Listed in nginx_tls_sites, not nginx_sites, because of the two lines naming
+# /etc/letsencrypt below: the role deploys this file only once that certificate
+# is on the host, so a first run on a fresh VPS does not fail `nginx -t` on a
+# key that certbot has not fetched yet. The plain-HTTP half, which serves the
+# ACME challenge that gets it fetched, is sites/ennemi-web.
+#
+# This host serves the site from disk -- it is the web server now, not a
+# forwarder to ennemi-brain -- so there is no upstream here and none of the
+# X-Forwarded-Proto care the ennemi-dev edge needs.
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name www.ennemi.net ennemi.net;
+
+    access_log /var/log/nginx/ennemi-web-tls.access.log;
+    error_log  /var/log/nginx/ennemi-web-tls.error.log;
+
+    # Obtained and renewed by roles/certbot. The lineage is named for the first
+    # domain of the certificate, which covers both names of this vhost.
+    ssl_certificate /etc/letsencrypt/live/www.ennemi.net/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/www.ennemi.net/privkey.pem;
+    ssl_trusted_certificate /etc/letsencrypt/live/www.ennemi.net/chain.pem;
+
+    # SSL Configuration - Mozilla Intermediate Profile.
+    # Same profile as ennemi-brain's sites/ennemi.net, so the domain presents
+    # itself identically whichever host is answering for it.
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
+    ssl_prefer_server_ciphers off;
+
+    # SSL Session Configuration
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:50m;
+    ssl_session_tickets off;
+
+    # No OCSP stapling, unlike ennemi-brain's otherwise identical block. Let's
+    # Encrypt has retired OCSP: the certificates it issues now carry no
+    # responder URL at all, so `ssl_stapling on` staples nothing and only logs
+    #
+    #   [warn] "ssl_stapling" ignored, no OCSP responder URL in the certificate
+    #
+    # on every start and reload. Check for yourself with
+    # `openssl x509 -noout -ocsp_uri -in fullchain.pem`, which prints nothing.
+    # The `resolver` on ennemi-brain is there for stapling too, and goes with
+    # it -- nothing else in this file resolves a name at runtime, so the VPS
+    # needs no DNS of its own to serve the site.
+
+    # Security Headers. The HSTS max-age is two years and includes subdomains,
+    # matching what this domain already sends from ennemi-brain -- a shorter one
+    # here would not take effect on a client that has the longer one cached.
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # ---------------------------------------------------------- compression
+    #
+    # The site is built with its .gz and .br variants already on disk beside
+    # each file, so the static pair is what actually serves them: nginx picks
+    # index.html.br or index.html.gz over index.html according to the client's
+    # Accept-Encoding, and never compresses the same bytes twice.
+    #
+    # brotli_static and brotli need libnginx-mod-http-brotli-static and
+    # -filter, which the role installs only where nginx_brotli is true. These
+    # directives are a fatal `nginx -t` error on a host without the modules, so
+    # the two always go together.
+    gzip_static on;
+    brotli_static on;
+
+    # Dynamic compression, for anything with no pre-built variant.
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_buffers 16 8k;
+    gzip_http_version 1.1;
+    gzip_min_length 256;
+
+    brotli on;
+    brotli_comp_level 6;
+    brotli_min_length 256;
+
+    # Text only, and deliberately: the video under morceau/ and the images are
+    # already compressed formats, and running them through gzip or brotli costs
+    # CPU to make them very slightly larger.
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/json
+        application/javascript
+        application/x-javascript
+        application/xml
+        application/xml+rss
+        application/xhtml+xml
+        image/svg+xml
+        image/x-icon
+        font/opentype
+        font/truetype
+        font/eot
+        font/otf;
+
+    brotli_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/json
+        application/javascript
+        application/x-javascript
+        application/xml
+        application/xml+rss
+        application/xhtml+xml
+        image/svg+xml
+        image/x-icon
+        font/opentype
+        font/truetype
+        font/eot
+        font/otf;
+
+    # ------------------------------------------------------------- the site
+    #
+    # The build that is already on this host: the landing page at / and the
+    # standalone /morceau trailer. Static files only -- nothing here runs an
+    # application, and the show app stays on ennemi-brain inside the venue
+    # network, not reachable through this site.
+    #
+    # The content is pushed by the ennemi-web project, whose scripts/deploy.sh
+    # builds and then `rsync -az --delete --rsync-path="sudo rsync"` into this
+    # directory over ssh. Static files only, so nginx picks a deploy up with no
+    # reload. Nothing in this repository manages the content or the ownership
+    # rsync brings with it -- nginx_webroots only makes sure the directory is
+    # there. Note the --delete: the ACME challenge webroot is deliberately
+    # outside /var/www altogether, at /srv/acme, so it cannot be in this tree.
+    root /var/www/ennemi-web;
+    index index.html;
+
+    # Path-relative redirects. Harmless now that TLS is terminated on this host,
+    # and still right if anything is ever put in front of it again.
+    absolute_redirect off;
+
+    # Every location below repeats the security headers instead of inheriting
+    # them, and has to: add_header is not additive across blocks -- a location
+    # that sets one of its own drops every header from the server block. Setting
+    # only Cache-Control would quietly strip HSTS from those responses.
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # morceau/index.html only resolves with the trailing slash.
+    location = /morceau {
+        return 308 /morceau/$is_args$args;
+    }
+
+    # Hashed file names from the Vite build (main-BUCDZv5v.css and friends):
+    # safe to cache forever, because a changed file gets a changed name.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        try_files $uri =404;
+    }
+
+    # Carousel screenshots, trailer clips and audio: stable names, rarely
+    # replaced, and already-compressed formats -- the gzip_types above leave
+    # them alone rather than spending CPU to make them slightly larger.
+    location ~ ^/(images|morceau/video|morceau/audio)/ {
+        add_header Cache-Control "public, max-age=86400" always;
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        try_files $uri =404;
+    }
+
+    # HTML entry points: always revalidate, so a deploy is visible immediately
+    # rather than after a cache expires.
+    location / {
+        add_header Cache-Control "no-cache" always;
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        try_files $uri $uri/ =404;
+    }
+}
+
+# Everything else that reaches port 443 on this machine. Without it the vhost
+# above is the default server, and a client connecting with any SNI at all --
+# or none -- is answered with the ennemi.net certificate.
+#
+# ssl_reject_handshake needs no certificate of its own: nginx aborts the
+# handshake with unrecognized_name and nothing is served. It is the TLS-layer
+# equivalent of the 444 catch-all on port 80.
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+
+    ssl_reject_handshake on;
+    access_log off;
+}

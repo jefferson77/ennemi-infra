@@ -4,8 +4,27 @@
 # into sites-enabled. Set per group in inventory/group_vars/.
 nginx_sites: []
 
+# Sites that reference a TLS certificate which may not be on the host yet. Each
+# entry is {name: <file in files/sites/>, certificate: <path that must exist>},
+# and the file is deployed and enabled only once that certificate is there.
+#
+# Without this, an edge that has never had a certificate cannot be brought up in
+# one go: the site config names a key that does not exist, `nginx -t` fails, and
+# the play dies before certbot ever gets the chance to fetch one. A gated site
+# breaks that circle -- the plain-HTTP half serves the ACME challenge, the
+# certbot role obtains the certificate, and this half appears in the same run.
+#
+# The enabled symlink is removed again when the certificate goes away, so a
+# deleted or revoked lineage leaves nginx startable rather than wedged.
+nginx_tls_sites: []
+
 # Fragments copied to /etc/nginx/conf.d/, from roles/nginx/files/conf.d/.
 nginx_conf_d: []
+
+# Document roots to create, for sites that serve files from disk rather than
+# proxying. Created empty and never emptied: the content itself belongs to
+# whatever deploys the site, not to this role.
+nginx_webroots: []
 
 # Stream (layer 4 TCP/UDP) configurations, by file name, from
 # roles/nginx/files/streams/. The same available/enabled pair as the sites
@@ -17,6 +36,17 @@ nginx_conf_d: []
 # nginx.conf to include them; a host with an empty list is left exactly as it
 # is today, nginx.conf included.
 nginx_stream_sites: []
+
+# Install the brotli modules, for a host whose sites use brotli or
+# brotli_static. Two dynamic modules on Ubuntu, not part of the nginx package:
+# -filter compresses a response as it is sent, -static serves a .br file that is
+# already on disk beside the original. Installing them drops load_module lines
+# into modules-enabled/, which nginx.conf already includes.
+#
+# Off by default, and the reason matters: brotli_static in a site config on a
+# host without the module is not a warning, it is a fatal `nginx -t` error. So a
+# host either has both the directives and the package, or neither.
+nginx_brotli: false
 
 # Remove the stock "default" site nginx enables on install, so the sites listed
 # above are the only ones served.

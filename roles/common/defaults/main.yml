@@ -13,6 +13,18 @@ common_packages:
   - htop
   - vim
   - curl
+  - gh      # GitHub CLI, so every host can reach the private repositories
+
+# Personal access token gh logs in with, for the {{ common_user }} account.
+# Deliberately empty here: the real value is GITHUB_TOKEN in the git-ignored
+# .env, read by inventory/group_vars/all.yml. Left empty, gh is still
+# installed and the login stays a manual `gh auth login` on the host.
+common_gh_token: ""
+
+# Run `gh auth setup-git`, so plain git over HTTPS (clone, fetch, push) uses
+# the same token as gh itself instead of prompting. Only reached when a token
+# is set.
+common_gh_setup_git: true
 
 # The admin account every host must have. On ennemi-brain and ennemi-dev it
 # already exists (uid 1000) and these settings match it, so the tasks are a

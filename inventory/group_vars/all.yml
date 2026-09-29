@@ -20,3 +20,11 @@ postgres_app_password: >-
   {{ lookup('ansible.builtin.ini', 'POSTGRES_APP_PASSWORD',
             type='properties', file=ennemi_env_file, errors='ignore')
      | default('', true) }}
+
+# Personal access token gh logs in with on every host (roles/common), so the
+# ennemi account can reach the private GitHub repositories. Optional: left out
+# of .env, gh is still installed and the login stays a manual `gh auth login`.
+common_gh_token: >-
+  {{ lookup('ansible.builtin.ini', 'GITHUB_TOKEN',
+            type='properties', file=ennemi_env_file, errors='ignore')
+     | default('', true) }}

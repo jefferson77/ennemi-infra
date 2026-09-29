@@ -1,0 +1,52 @@
+# Public edge for ennemi.net on ennemi-vps: the plain-HTTP half.
+#
+# The vhost has exactly two jobs, and deliberately no certificate reference of
+# its own -- which is what lets it validate and serve on a host that has never
+# had one, and so lets certbot obtain the first one. The TLS half is a separate
+# file, sites/ennemi-web-tls, deployed only once that certificate exists.
+#
+#   1. answer the ACME HTTP-01 challenge. Let's Encrypt fetches the token over
+#      plain HTTP on port 80, following redirects only to another http:// or
+#      https:// URL for the same name -- so this has to stay reachable here,
+#      every renewal, not just the first issuance.
+#   2. redirect everything else to https.
+#
+# The catch-all for a request naming some other host is not here: it is the
+# `listen 80 default_server` in sites/vps-placeholder, which this host keeps
+# enabled beside this file. Two default servers on the same port is a fatal
+# `nginx -t` error, so this vhost must not declare one.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name www.ennemi.net ennemi.net;
+
+    access_log /var/log/nginx/ennemi-web.access.log;
+    error_log  /var/log/nginx/ennemi-web.error.log;
+
+    # Served from disk and never redirected: a 301 here would break renewal.
+    #
+    # `root`, not `alias` -- certbot writes the token to
+    # <webroot>/.well-known/acme-challenge/<token>, so the request path is
+    # appended to the root unchanged. The path below is certbot_webroot in
+    # roles/certbot/defaults/main.yml; the two have to agree.
+    #
+    # Note where it is NOT: outside /var/www, and so outside anything a content
+    # deploy can reach. ennemi-web rsyncs into its document root with --delete,
+    # and a challenge token anywhere under that tree would be deleted by a
+    # deploy that landed between certbot writing it and Let's Encrypt fetching
+    # it. Separate trees is what makes the two deploys unable to collide.
+    #
+    # ^~ so this location wins outright over any regex location added later.
+    location ^~ /.well-known/acme-challenge/ {
+        root /srv/acme;
+        default_type "text/plain";
+        access_log off;
+    }
+
+    # $host, not a literal, so the apex stays on the apex rather than being
+    # bounced to www. Change it to https://www.ennemi.net$request_uri to
+    # canonicalise instead, the way ennemi-brain's sites/ennemi.net does.
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}

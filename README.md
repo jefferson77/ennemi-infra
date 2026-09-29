@@ -29,6 +29,7 @@ roles/common/            # baseline shared by every host
 roles/docker/            # Docker Engine + compose plugin
 roles/tailscale/         # tailscale, kept at the latest release
 roles/nginx/             # nginx + the per-host site configs
+roles/certbot/           # Let's Encrypt certificates, obtained and renewed
 roles/dragonfly/         # Dragonfly (redis replacement), as a systemd service
 roles/postgres/          # PostgreSQL 18, from the Ubuntu archive
 roles/dev/               # development-machine toolchain (ennemi-dev only)
@@ -59,6 +60,7 @@ Anything starting with `-` is passed straight through to `ansible-playbook`.
 ./deploy docker                # only the docker role
 ./deploy tailscale             # only the tailscale role
 ./deploy nginx                 # only the nginx role
+./deploy certbot               # only the certbot role
 ./deploy dragonfly             # only the dragonfly role
 ./deploy cache                 # every role, on the hosts that run the cache
 ./deploy postgres              # only the postgres role
@@ -104,6 +106,7 @@ cp .env.example .env      # then fill in the real values
 | Key | Used by |
 |-----|---------|
 | `POSTGRES_APP_PASSWORD` | the `ennemi` PostgreSQL role that owns the `ennemi` database |
+| `GITHUB_TOKEN` | the `gh` login the `common` role sets up on every host (optional) |
 
 `inventory/group_vars/all.yml` is the only place that reads the file, with an
 `ini` lookup in `properties` mode, and the path is derived from the inventory
@@ -136,7 +139,8 @@ other:
 
 ```bash
 ./deploy --tags user        # only the account
-./deploy --tags packages    # only the upgrade
+./deploy --tags packages    # only the upgrade and the baseline toolset
+./deploy --tags gh          # only the baseline toolset and the GitHub login
 ```
 
 ### The `ennemi` account (tag `user`)
@@ -154,10 +158,10 @@ rule and fall back to password-prompting sudo.
 ### Package maintenance (tag `packages`)
 
 Runs `apt update`, then `apt dist-upgrade` (with autoremove/autoclean), then
-installs the baseline toolset — `git`, `htop`, `vim`, `curl`, from
+installs the baseline toolset — `git`, `htop`, `vim`, `curl`, `gh`, from
 `common_packages`. Extend that list rather than installing by hand, so a
-rebuilt host comes back with the same tools. The role then
-ends with the list of hosts that need a reboot and the packages that asked
+rebuilt host comes back with the same tools. Then the GitHub login (below). The
+role ends with the list of hosts that need a reboot and the packages that asked
 for it:
 
 ```
@@ -175,6 +179,40 @@ playbook — so rebooting stays a manual step:
 ansible ennemi-vps -b -m reboot     # over SSH
 sudo reboot                         # on ennemi-dev, from a shell
 ```
+
+### The GitHub CLI (tag `gh`)
+
+Every host gets `gh`, so each can clone, fetch and push the private
+repositories. It is the Ubuntu archive's package, listed in `common_packages`
+like the rest of the baseline — all three hosts run 26.04, which ships it, and
+one package is not worth a third-party repository and its signing key.
+
+The login is the `GITHUB_TOKEN` in `.env` (see [Credentials](#credentials)) — a
+personal access token with at least the `repo` scope, `read:org` too for
+organisation repositories. The role reads the token `gh` already holds and only
+logs in when it differs, so a run is `ok` on an unchanged token and `changed`
+when you rotate it, and the token itself never reaches the log (`no_log`). It
+then runs `gh auth setup-git`, which points plain `git` over HTTPS at the same
+credentials — so `git clone https://github.com/...` works without a prompt, not
+just `gh repo clone`. Set `common_gh_setup_git=false` to leave `~/.gitconfig`
+alone.
+
+`GITHUB_TOKEN` is optional, unlike the PostgreSQL password: leave it out and
+`gh` is still installed on every host, but logging in stays a manual
+`gh auth login` on each one. The role says which of the two it did:
+
+```
+TASK [common : Report the GitHub CLI state] ************************
+ok: [ennemi-vps] => {
+    "msg": "ennemi-vps: gh version 2.46.0 (2025-12-13 Ubuntu 2.46.0-4),
+    ennemi authenticated with GITHUB_TOKEN from .env"
+}
+```
+
+The token is authorised for the `ennemi` account on each host, so anyone who
+can reach that account can use it. It is the same trade-off as the SSH key the
+`user` half authorises; scope the token to what those hosts actually need to
+read.
 
 Variables: see `roles/common/defaults/main.yml`.
 
@@ -242,18 +280,161 @@ roles/nginx/files/streams/   -> /etc/nginx/streams-available/ (then symlinked)
 roles/nginx/files/conf.d/    -> /etc/nginx/conf.d/
 ```
 
-| Host           | `nginx_sites`                  | `nginx_stream_sites` | `nginx_conf_d`     |
-|----------------|--------------------------------|----------------------|--------------------|
-| `ennemi-brain` | `ennemi.net`, `dev.ennemi.net` | —                    | `stub_status.conf` |
-| `ennemi-vps`   | `vps-placeholder`              | —                    | —                  |
-| `ennemi-dev`   | `ennemi.net-edge`              | `ennemi.net-tls`     | —                  |
+| Host           | `nginx_sites`                        | `nginx_tls_sites`   | `nginx_stream_sites` | `nginx_conf_d`     |
+|----------------|--------------------------------------|---------------------|----------------------|--------------------|
+| `ennemi-brain` | `ennemi.net`, `dev.ennemi.net`       | —                   | —                    | `stub_status.conf` |
+| `ennemi-vps`   | `vps-placeholder`, `ennemi-web`  | `ennemi-web-tls`| —                    | —                  |
+| `ennemi-dev`   | `ennemi.net-edge`                    | —                   | `ennemi.net-tls`     | —                  |
 
 `ennemi-brain`'s two files were copied off the running host byte for byte, so
-applying the role there reports `changed=0` and never reloads it. The VPS gets
-a placeholder default server instead: `200` on `/healthz`, `204` everywhere
-else, to be replaced when it has a real job.
+applying the role there reports `changed=0` and never reloads it.
+
+### Sites that need a certificate (`nginx_tls_sites`)
+
+A site config naming `ssl_certificate` is only valid once that file exists: on a
+host that has never had one, `nginx -t` fails and takes the whole play with it —
+before the role that would have fetched the certificate ever runs. That is a
+circle, and `nginx_tls_sites` is how it gets broken.
+
+A site listed there carries the path it depends on, and the role deploys and
+enables it **only once that path exists**:
+
+```yaml
+nginx_tls_sites:
+  - name: ennemi-web-tls
+    certificate: /etc/letsencrypt/live/www.ennemi.net/fullchain.pem
+```
+
+On a host without the certificate the site is left disabled and the run says so,
+rather than failing:
+
+```
+TASK [nginx : Report the TLS sites still waiting for a certificate] ******
+ok: [ennemi-vps] => {
+    "msg": "ennemi-vps: ennemi-web-tls is not served —
+    /etc/letsencrypt/live/www.ennemi.net/fullchain.pem does not exist yet.
+    The certbot role fetches it, and enables the site in the same run."
+}
+```
+
+The [`certbot` role](#the-certbot-role) runs straight after, and when it has
+obtained a certificate it re-runs this one step (`roles/nginx/tasks/tls_sites.yml`,
+a separate file for exactly that reason), so a new edge comes up in a single
+deploy instead of needing a second one to notice. The gate works in both
+directions: delete or revoke a lineage and the next run removes the symlink
+again, which leaves nginx startable instead of wedged on a missing key.
+
+### Other per-host switches
+
+`nginx_webroots` is a list of document roots to make sure exist. Existence only —
+no owner, group or mode, because the directory is usually written by whatever
+deploys the site (`/var/www/ennemi-web` belongs to the `ennemi` account) and
+taking it over as `www-data` would break that on the next run.
+
+`nginx_brotli` installs `libnginx-mod-http-brotli-filter` and `-static`, for a
+host whose sites use `brotli` or `brotli_static`. Off by default and opt-in per
+host for the same reason the stream module is: those directives are a *fatal*
+`nginx -t` error on a host without the modules, not a warning, so a host has
+both the directives and the package or neither.
+
+### The ennemi.net edge on `ennemi-vps`
+
+The VPS is the public edge, and unlike `ennemi-dev` it is also the web server:
+it terminates TLS itself, with its own Let's Encrypt certificate, and serves the
+site from `/var/www/ennemi-web`. Nothing is forwarded to `ennemi-brain`.
+
+The vhost is **two files**, and the split is the point:
+
+| Port | File | Names a certificate? | Listed in |
+|------|------|----------------------|-----------|
+| 80  | `sites/ennemi-web`     | no  | `nginx_sites` |
+| 443 | `sites/ennemi-web-tls` | yes | `nginx_tls_sites` |
+
+The plain-HTTP half names no key, so it comes up on a host that has never had a
+certificate — which is what lets certbot obtain the first one. It does exactly
+two things: serve `/.well-known/acme-challenge/` from `/srv/acme`,
+and `301` everything else to https. The challenge location is **not** redirected
+and must not be: Let's Encrypt fetches that token over plain HTTP on every
+renewal, not just the first issuance.
+
+The redirect target is `https://$host$request_uri`, so the apex stays on the
+apex rather than being bounced to `www` (`ennemi-brain`'s config canonicalises
+to `www` instead; either is a one-line change).
+
+`vps-placeholder` stays enabled beside them. It owns `listen 80 default_server`
+and answers anything naming a host this machine does not serve, so the real
+vhost does not have to — **two default servers on one port is a fatal `nginx -t`
+error**. It also keeps `/healthz` answering. Dropping it from `nginx_sites`
+would not remove it either: the role never deletes a site it no longer lists, so
+the stale symlink would stay and break the config in exactly that way.
+
+Port 443 has its own catch-all, `ssl_reject_handshake on`, which needs no
+certificate and aborts the handshake for any other SNI — the TLS-layer
+equivalent of the `444` on port 80.
+
+**Who owns what.** This repository owns the architecture — the directory, the
+nginx sites, the certificate and its renewal. The `ennemi-web` project owns the
+*contents* of the document root and nothing else. The two deploy independently
+and cannot collide:
+
+| | `ennemi-metal` (here) | `ennemi-web` |
+| --- | --- | --- |
+| `/var/www/ennemi-web` | creates it, never writes in it | owns everything inside it |
+| `/srv/acme` | owns — the ACME challenge webroot | cannot reach it |
+| nginx sites, TLS, certbot | owns | — |
+
+Two things enforce that rather than just describing it. The ACME challenge
+webroot is `/srv/acme`, outside `/var/www` altogether, so the content deploy's
+`rsync --delete` can never remove a challenge token mid-renewal whatever its
+`VPS_PATH` is. And `ennemi-web`'s `scripts/deploy.sh` refuses to *create* the
+web root — a host where `nginx_webroots` has not been applied gets a clear error
+instead of a site nothing is configured to serve.
+
+**What it serves** is the `ennemi-web` build already on the host — the landing
+page at `/` and the standalone `/morceau` trailer. Static files only; the show
+app stays on `ennemi-brain` inside the venue network and is not reachable
+through this site. The content is pushed by that project (`make deploy` rsyncs
+its `dist/` in) and is not managed here, ownership included — `nginx_webroots`
+only makes sure the directory exists.
+
+Caching is per content type, so a deploy is visible immediately without giving
+up long-lived caching where it is free:
+
+| Path | `Cache-Control` | why |
+|------|-----------------|-----|
+| `/assets/` | `max-age=31536000, immutable` | hashed names — a changed file gets a changed name |
+| `/images/`, `/morceau/video/`, `/morceau/audio/` | `max-age=86400` | stable names, rarely replaced |
+| everything else (HTML) | `no-cache` | revalidate, so a deploy shows up at once |
+
+`/morceau` without the trailing slash is a `308` to `/morceau/`, which is the
+only form that resolves.
+
+**Compression is served from disk.** The build ships `.br` and `.gz` beside
+every text file, so the vhost sets `gzip_static`/`brotli_static` and nginx picks
+the right variant out of `Accept-Encoding` instead of compressing the same bytes
+on every request. That is what `nginx_brotli: true` on this host is for. The
+images and video are already-compressed formats and are deliberately left out of
+`gzip_types`.
+
+Two details in that file worth keeping:
+
+- **No OCSP stapling**, unlike `ennemi-brain`'s otherwise identical TLS block.
+  Let's Encrypt has retired OCSP — the certificates it issues now carry no
+  responder URL at all, so `ssl_stapling on` staples nothing and logs
+  `"ssl_stapling" ignored, no OCSP responder URL in the certificate` on every
+  reload. `openssl x509 -noout -ocsp_uri -in fullchain.pem` prints nothing.
+  The `resolver` line goes with it, so the VPS needs no DNS to serve the site.
+- **The security headers are repeated inside `location /assets/`.** `add_header`
+  is not additive across blocks: a location that sets one of its own drops every
+  header from the server block. Setting only `Cache-Control` there would quietly
+  strip HSTS from every asset response.
 
 ### The ennemi.net edge on `ennemi-dev`
+
+> This is the arrangement **before** the cutover described above. Once public
+> DNS points at `ennemi-vps`, this path stops receiving traffic. It is kept
+> here, and on disk, because it still works and is what the domain falls back
+> to if the records are pointed home again.
 
 Public DNS for `ennemi.net` and `www.ennemi.net` points at this site's address,
 but the web server is on `ennemi-brain`. `ennemi-dev` forwards to it over the
@@ -321,10 +502,14 @@ The role deliberately does **not** manage:
   the `libnginx-mod-stream` package that provides the context. `stream` is a
   top-level sibling of `http`, so unlike `conf.d` and `sites-enabled` there is
   no packaged include point to drop it into.
-- **certificates and keys.** The site configs reference
-  `/etc/letsencrypt/live/www.ennemi.net/` and `/etc/nginx/ssl/`, which stay on
-  the host. Nothing secret is in this repo, and a host that lacks those files
-  cannot serve those sites.
+- **certificates and keys**, on `ennemi-brain` and `ennemi-dev`. The site
+  configs there reference `/etc/letsencrypt/live/www.ennemi.net/` and
+  `/etc/nginx/ssl/`, which stay on the host and are renewed as they always were.
+  Nothing secret is in this repo, and a host that lacks those files cannot serve
+  those sites — which is what `nginx_tls_sites` turns from a failed play into a
+  skipped site. On `ennemi-vps` the certificate *is* managed, by the
+  [`certbot` role](#the-certbot-role); the private key still never leaves the
+  host.
 - the `*.bak` / `*.backup.*` files in `sites-available/` on `ennemi-brain` —
   they are not live config and were left where they are.
 
@@ -333,6 +518,108 @@ fires, so a broken config fails the play instead of reaching a live server.
 Changes reload nginx rather than restarting it.
 
 Variables: see `roles/nginx/defaults/main.yml`.
+
+## The `certbot` role
+
+Obtains and renews the Let's Encrypt certificates a host serves, over HTTP-01.
+Only `ennemi-vps` asks for one today:
+
+```yaml
+certbot_email: nico@data4green.com
+
+certbot_certificates:
+  - name: www.ennemi.net          # the lineage — /etc/letsencrypt/live/<name>/
+    domains:
+      - www.ennemi.net
+      - ennemi.net
+```
+
+`certbot_certificates` is empty by default and the whole role is one guarded
+block, so a host that asks for nothing is left completely alone — the package is
+not even installed. `certbot_email` is asserted on, not defaulted: Let's Encrypt
+sends expiry warnings there, and that mail is the only notice you get that
+unattended renewal has stopped working.
+
+**It runs after nginx, and has to.** HTTP-01 is validated by fetching a file
+over port 80, so nginx must already be serving `/.well-known/acme-challenge/`
+before certbot can ask for anything. The `--webroot` method rather than
+`--standalone`: standalone binds port 80 itself, which would mean stopping and
+starting nginx on every renewal. Here nginx keeps serving and certbot only drops
+a file into a directory it already publishes. `certbot_webroot` and the `root` in
+`sites/ennemi-web` have to agree; both are `/srv/acme`.
+
+`/srv/acme` is deliberately outside `/var/www`, not merely beside the site.
+`ennemi-web` deploys with `rsync -a --delete` under `sudo`, so a token anywhere
+that deploy can reach would be deleted if it landed between certbot writing the
+token and Let's Encrypt fetching it — a renewal failure that only appears when
+someone happens to deploy in that window, which is the worst kind to debug.
+Keeping the two in separate trees makes it structurally impossible rather than
+merely unlikely, whatever `VPS_PATH` the content deploy is given.
+
+The issuance is guarded by `creates:`, so it runs once per lineage on a host
+that does not have it and never again. Renewal is not this role's job — the
+package's `certbot.timer` does it twice a day with up to twelve hours of jitter,
+and re-running `certonly` on every deploy would issue duplicate certificates and
+walk straight into the weekly rate limit. `--cert-name` pins the lineage, so
+`/etc/letsencrypt/live/www.ennemi.net/` stays where the nginx config expects it
+even if the domain list changes later.
+
+`/etc/letsencrypt/renewal-hooks/deploy/reload-nginx` is what makes an unattended
+renewal actually take effect. certbot runs it only after it has *installed* a
+renewed certificate, and without it the new files sit on disk unread by the
+running nginx until something else happens to reload it — which, on a host whose
+config only changes when someone deploys, can easily be after it has expired.
+
+When the issuance succeeds, the role re-runs the one nginx step that was waiting
+on the certificate, so a new edge comes up in a single deploy:
+
+```
+TASK [certbot : Obtain the certificates] ****************************
+changed: [ennemi-vps] => (item=www.ennemi.net)
+
+TASK [nginx : Enable the TLS site configurations] *******************
+changed: [ennemi-vps] => (item=ennemi-web-tls)
+
+RUNNING HANDLER [nginx : Reload nginx] ******************************
+changed: [ennemi-vps]
+```
+
+### Before the first issuance
+
+Three things are outside this repository and will fail the issuance if they are
+not true — HTTP-01 has no way around any of them:
+
+1. `ennemi.net` and `www.ennemi.net` must **already resolve to the VPS's public
+   address**. The certificate cannot be pre-fetched before the DNS cutover.
+2. Ports **80 and 443 must be open** inbound, at the VPS provider's firewall as
+   well as any local one. Nothing in this repo manages a firewall.
+3. The content must be in `/var/www/ennemi-web`, or the domain serves `404`s in
+   the window between DNS moving and the site arriving.
+
+Get it wrong and you spend attempts against a rate limit of five failures per
+hour, so try it against the staging CA first. Those certificates are signed by
+an untrusted root — browsers reject them — but the limits are far looser:
+
+```bash
+./deploy ennemi-vps --tags=nginx,certbot -e certbot_staging=true
+```
+
+Switching back to production does **not** replace a staging certificate: the
+issuance is skipped while a lineage exists, so delete it first with
+`sudo certbot delete --cert-name www.ennemi.net`.
+
+Note the `=` in `--tags=nginx,certbot`. A flag and its value have to be joined,
+or the wrapper reads the value as a target of its own.
+
+### Checking it
+
+```bash
+sudo certbot certificates        # the lineage, its names and its expiry
+sudo certbot renew --dry-run     # proves the webroot path renews unattended
+systemctl list-timers certbot.timer
+```
+
+Variables: see `roles/certbot/defaults/main.yml`.
 
 ## The `dragonfly` role
 

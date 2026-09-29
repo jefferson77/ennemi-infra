@@ -20,6 +20,20 @@
       tags: [adguard]
     - role: nginx
       tags: [nginx]
+    # After nginx, and it has to be: the HTTP-01 challenge is validated by
+    # fetching a file over port 80, so nginx must already be *serving*
+    # /.well-known/acme-challenge/ before certbot can ask for a certificate.
+    #
+    # Being listed after it is necessary and not sufficient. The nginx role only
+    # notifies its reload handler, which would otherwise run at the end of the
+    # play -- after this role, against a server still on the old config. The
+    # certbot role flushes handlers itself before validating; see the top of
+    # roles/certbot/tasks/main.yml.
+    #
+    # The role closes the loop by re-running the one nginx step that was waiting
+    # on that certificate, so a new edge comes up in a single deploy.
+    - role: certbot
+      tags: [certbot]
 
 # Services that belong to some of the hosts only, each scoped to the group that
 # names it. After the baseline play, which is where docker was installed.

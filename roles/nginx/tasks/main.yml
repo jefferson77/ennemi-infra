@@ -21,6 +21,20 @@
   when: nginx_stream_sites | length > 0
   notify: Reload nginx
 
+# Same reasoning as the stream module above: only for a host that asked, so a
+# host whose sites do not mention brotli keeps an empty modules-enabled/.
+- name: Install the brotli modules
+  ansible.builtin.apt:
+    name:
+      - libnginx-mod-http-brotli-filter
+      - libnginx-mod-http-brotli-static
+    state: present
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when: nginx_brotli | bool
+  notify: Reload nginx
+
 - name: Create the stream configuration directories
   ansible.builtin.file:
     path: "/etc/nginx/{{ item }}"
@@ -53,6 +67,18 @@
   when: nginx_stream_sites | length > 0
   notify: Reload nginx
 
+# Existence only: no owner, group or mode. A document root is usually written
+# by whatever deploys the site -- /var/www/ennemi-web on the VPS belongs to the
+# ennemi account -- and taking it over as www-data here would break exactly that
+# on the next run. Ansible leaves an existing directory's ownership alone when
+# none is given, and a new one is created root-owned, which nginx can read.
+- name: Create the document roots
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+  become: true
+  loop: "{{ nginx_webroots }}"
+
 - name: Deploy the conf.d fragments
   ansible.builtin.copy:
     src: "conf.d/{{ item }}"
@@ -80,6 +106,12 @@
     src: "/etc/nginx/sites-available/{{ item }}"
     dest: "/etc/nginx/sites-enabled/{{ item }}"
     state: link
+    # force only bites in --check: the copy above writes nothing there, so a
+    # site being added for the first time has no source to link to and the
+    # module fails on a host that is otherwise perfectly fine. In a real run
+    # the file has just been copied, ansible_check_mode is false, and this
+    # behaves exactly as it always has.
+    force: "{{ ansible_check_mode }}"
   become: true
   loop: "{{ nginx_sites }}"
   notify: Reload nginx
@@ -103,6 +135,12 @@
   become: true
   loop: "{{ nginx_stream_sites }}"
   notify: Reload nginx
+
+# After the plain sites above, which is where the HTTP half of a gated site --
+# and with it the ACME challenge location -- gets deployed.
+- name: Deploy the sites that need a TLS certificate
+  ansible.builtin.include_tasks: tls_sites.yml
+  when: nginx_tls_sites | length > 0
 
 - name: Disable the stock default site
   ansible.builtin.file:

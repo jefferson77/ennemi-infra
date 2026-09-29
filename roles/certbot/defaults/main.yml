@@ -1,0 +1,58 @@
+---
+# certbot from the Ubuntu archive, as with gh in the common role: one package is
+# not worth a third-party repository and its signing key. The snap that upstream
+# recommends is avoided for the same reason.
+certbot_packages:
+  - certbot
+
+# Certificates to obtain, one entry per certbot "lineage". Empty here on
+# purpose: a host that asks for no certificate is left completely untouched, not
+# even the package installed. Set it per host in inventory/host_vars/.
+#
+#   certbot_certificates:
+#     - name: www.ennemi.net          # the lineage, and so the path under
+#       domains:                      # /etc/letsencrypt/live/<name>/
+#         - www.ennemi.net
+#         - ennemi.net
+#
+# Every name in `domains` goes into the same certificate, and every one of them
+# must resolve to this host and answer on port 80 before the issuance can work.
+# `name` is passed as --cert-name, so it stays stable when the domain list
+# changes -- without it certbot renames the lineage after the first domain and
+# the paths in the nginx config stop matching.
+certbot_certificates: []
+
+# Account e-mail. Let's Encrypt sends expiry warnings here, which is the only
+# notice you get that unattended renewal has quietly stopped working. Asserted
+# on, not defaulted, when a certificate is requested.
+certbot_email: ""
+
+# Webroot the HTTP-01 challenge token is written to. The vhost on port 80 must
+# serve /.well-known/acme-challenge/ from this same directory -- see the
+# matching `root` in roles/nginx/files/sites/ennemi-web.
+#
+# The webroot method rather than standalone: standalone binds port 80 itself, so
+# every renewal would have to stop and start nginx. Here nginx keeps serving and
+# certbot only drops a file in a directory it already publishes.
+#
+# Deliberately outside /var/www, not merely beside the site: the content project
+# rsyncs into its document root with --delete and under sudo, so a challenge
+# token anywhere it can reach would be deleted by a deploy that landed between
+# certbot writing it and Let's Encrypt fetching it -- a renewal failure that
+# only appears when someone happens to deploy in that window, which is the worst
+# kind to debug. /srv/acme is not under any document root and never should be,
+# so the two deploys cannot collide however VPS_PATH is overridden.
+certbot_webroot: /srv/acme
+
+# Use Let's Encrypt's staging CA. Its certificates are signed by an untrusted
+# root, so browsers reject them, but the rate limits are far looser than the
+# five-failures-per-hour and five-duplicates-per-week of production. Worth
+# turning on for the first run against a new domain, where a misrouted DNS
+# record or a closed port 80 can burn several attempts:
+#
+#   ./deploy ennemi-vps --tags nginx,certbot -e certbot_staging=true
+#
+# Switching back to production afterwards does not replace a staging
+# certificate: delete the lineage first (`sudo certbot delete --cert-name ...`),
+# since the issuance task below is skipped while one exists.
+certbot_staging: false

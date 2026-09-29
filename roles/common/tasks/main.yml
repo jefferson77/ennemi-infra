@@ -69,6 +69,8 @@
     DEBIAN_FRONTEND: noninteractive
   tags: [packages]
 
+# Also tagged gh, so `--tags gh` installs the CLI before the login tasks below
+# reach for it on a host that has never had a full run.
 - name: Install the baseline packages
   ansible.builtin.apt:
     name: "{{ common_packages }}"
@@ -76,7 +78,74 @@
   become: true
   environment:
     DEBIAN_FRONTEND: noninteractive
-  tags: [packages]
+  tags: [packages, gh]
+
+# ---------------------------------------------------------------- GitHub CLI
+# gh itself is installed by the baseline task above, from the Ubuntu archive
+# (all three hosts run 26.04, which ships it) — no third-party repository for
+# a single package. What is left here is the login, tagged `gh` as well as
+# `packages` so a token can be rotated without running the dist-upgrade.
+
+# The token gh already holds, so the login below runs on a fresh host and on a
+# rotated token, and is skipped on every other run. Non-zero rc and empty
+# output both mean "no token", which the comparison handles on its own.
+- name: Read the token {{ common_user }} is already logged in with
+  ansible.builtin.command: gh auth token --hostname github.com
+  become: true
+  become_user: "{{ common_user }}"
+  register: common_gh_current_token
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+  tags: [packages, gh]
+
+- name: Log {{ common_user }} in to GitHub
+  ansible.builtin.shell:
+    cmd: gh auth login --hostname github.com --with-token
+    stdin: "{{ common_gh_token }}"
+  become: true
+  become_user: "{{ common_user }}"
+  when:
+    - common_gh_token | length > 0
+    - common_gh_token != common_gh_current_token.stdout | default('') | trim
+  changed_when: true
+  no_log: true
+  tags: [packages, gh]
+
+# Writes a credential.helper for github.com into the account's ~/.gitconfig.
+# Idempotent and silent, so it is reported as ok rather than changed.
+- name: Let plain git use gh's credentials
+  ansible.builtin.command: gh auth setup-git --hostname github.com
+  become: true
+  become_user: "{{ common_user }}"
+  when:
+    - common_gh_token | length > 0
+    - common_gh_setup_git | bool
+  changed_when: false
+  tags: [packages, gh]
+
+# check_mode: false so a --check run reports the version actually on the host
+# rather than a skip; failed_when: false so it says so plainly when --check
+# reaches a host the baseline install has not really run on yet.
+- name: Read the installed gh version
+  ansible.builtin.command: gh --version
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  register: common_gh_version
+  tags: [packages, gh]
+
+- name: Report the GitHub CLI state
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ common_gh_version.stdout_lines | first | default('gh not installed', true) }},
+      {{ common_user }}
+      {{ 'authenticated with GITHUB_TOKEN from .env'
+         if common_gh_token | length > 0
+         else 'not logged in — run `gh auth login` on the host, or set GITHUB_TOKEN in .env' }}
+  tags: [packages, gh]
 
 - name: Check whether the upgrade requires a reboot
   ansible.builtin.stat:

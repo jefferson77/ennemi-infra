@@ -1,0 +1,273 @@
+---
+# Handlers run at the end of the PLAY, not the end of a role -- so without this
+# line the nginx that answers the ACME challenge below is still the one from
+# before the nginx role ran. That role deploys the vhost serving
+# /.well-known/acme-challenge/ and only *notifies* a reload; the running server
+# knows nothing about it until the handler fires, which would otherwise be long
+# after this role has finished.
+#
+# On a fresh VPS the consequence is precise and baffling: the challenge is
+# answered by whatever the old config had, the placeholder's `return 204`, and
+# Let's Encrypt reports "Invalid response ...: 204" while the config on disk
+# looks perfectly correct. Being a role later in the play is not enough; the
+# reload has to have actually happened.
+#
+# It flushes every pending handler, not only nginx's, on every host in the play.
+# That is harmless -- handlers are idempotent reloads and restarts, and this
+# only makes them happen a little earlier than they otherwise would.
+- name: Apply any pending handlers before validating
+  ansible.builtin.meta: flush_handlers
+
+# Everything is inside one block, so a host that names no certificate is left
+# exactly as it is -- certbot is not even installed on it. The nginx role guards
+# its stream half the same way, and this keeps ennemi-brain and ennemi-dev
+# untouched by a role that only the VPS needs.
+- name: Obtain and renew the Let's Encrypt certificates
+  when: certbot_certificates | length > 0
+  tags: [certbot]
+  vars:
+    # The preflight probe below. Not in defaults/: nothing outside this file has
+    # any reason to name them, and the file exists for a few seconds at most.
+    certbot_preflight_file: ansible-preflight
+    certbot_preflight_content: certbot-preflight-ok
+  block:
+
+    - name: Check that an account e-mail is set
+      ansible.builtin.assert:
+        that: certbot_email | length > 0
+        quiet: true
+        fail_msg: >-
+          certbot_email is empty on {{ inventory_hostname }}, but
+          {{ certbot_certificates | length }} certificate(s) are requested.
+          Let's Encrypt sends expiry warnings there, which is the only notice
+          you get that unattended renewal has stopped working. Set it in
+          inventory/host_vars/{{ inventory_hostname }}.yml.
+
+    - name: Install certbot
+      ansible.builtin.apt:
+        name: "{{ certbot_packages }}"
+        state: present
+      become: true
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      register: certbot_installed
+
+    # Created down to the challenge directory itself, so nginx has something to
+    # open rather than a 404 from a missing parent on the very first validation.
+    # World-readable and root-owned: certbot writes here as root, nginx only
+    # reads, and nothing secret is ever put in it -- the token is public by
+    # design, it is the ability to publish it that proves control of the name.
+    - name: Create the ACME challenge webroot
+      ansible.builtin.file:
+        path: "{{ certbot_webroot }}/.well-known/acme-challenge"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      become: true
+
+    - name: Create the renewal hook directory
+      ansible.builtin.file:
+        path: /etc/letsencrypt/renewal-hooks/deploy
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      become: true
+
+    - name: Install the nginx reload hook
+      ansible.builtin.copy:
+        src: reload-nginx
+        dest: /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+        owner: root
+        group: root
+        mode: "0755"
+      become: true
+
+    # Let's Encrypt allows five failed validations per hostname per hour, so a
+    # misconfiguration that is visible locally should never be discovered by
+    # spending one of them -- and the CA's error does not say which of DNS, the
+    # firewall or the vhost was wrong. This writes a file where certbot will
+    # write its token and fetches it back through nginx exactly as the CA would:
+    # plain HTTP, port 80, the domain in the Host header.
+    #
+    # It proves the half that is this repository's to get right -- nginx picks
+    # the vhost that roots at the challenge webroot, and the *running* server
+    # knows about it. It says nothing about whether the name resolves here or
+    # the port is open from outside, which is why the role's documentation lists
+    # those separately. 127.0.0.1 is enough for what it does prove: vhost
+    # selection does not depend on the address family.
+    #
+    # Skipped under --check, where the probe file is never actually written and
+    # a 404 would say nothing about the host.
+    - name: Check the challenge webroot before asking the CA
+      when: not ansible_check_mode
+      block:
+
+        - name: Write a probe token into the challenge webroot
+          ansible.builtin.copy:
+            content: "{{ certbot_preflight_content }}"
+            dest: "{{ certbot_webroot }}/.well-known/acme-challenge/{{ certbot_preflight_file }}"
+            owner: root
+            group: root
+            mode: "0644"
+          become: true
+          changed_when: false
+
+        - name: Fetch the probe back through nginx, once per domain
+          ansible.builtin.uri:
+            url: "http://127.0.0.1/.well-known/acme-challenge/{{ certbot_preflight_file }}"
+            headers:
+              Host: "{{ item }}"
+            return_content: true
+          loop: "{{ certbot_certificates | map(attribute='domains') | flatten }}"
+          register: certbot_preflight
+          changed_when: false
+          failed_when: false
+
+        - name: Note which domains did not answer
+          ansible.builtin.set_fact:
+            certbot_preflight_bad: >-
+              {{ certbot_preflight.results
+                 | rejectattr('status', 'equalto', 200)
+                 | map(attribute='item') | list }}
+
+        # The running server can be behind the configuration on disk, and a
+        # flushed handler only covers what changed in *this* run. A run that
+        # failed after the nginx role wrote its files but before its handler
+        # fired leaves exactly that: the config correct on disk, stale in
+        # memory, and no later run notifying a reload because the files already
+        # match. That state would never heal on its own, so reload and look
+        # again rather than fail on drift that is one graceful reload away.
+        - name: Reload nginx, in case it is behind the configuration on disk
+          ansible.builtin.systemd_service:
+            name: nginx
+            state: reloaded
+          become: true
+          when: certbot_preflight_bad | length > 0
+
+        - name: Fetch the probe again, after the reload
+          ansible.builtin.uri:
+            url: "http://127.0.0.1/.well-known/acme-challenge/{{ certbot_preflight_file }}"
+            headers:
+              Host: "{{ item }}"
+            return_content: true
+          loop: "{{ certbot_preflight_bad }}"
+          register: certbot_preflight_retry
+          when: certbot_preflight_bad | length > 0
+          changed_when: false
+          failed_when: false
+
+        - name: Note which domains still did not answer
+          ansible.builtin.set_fact:
+            certbot_preflight_bad: >-
+              {{ certbot_preflight_retry.results
+                 | rejectattr('status', 'equalto', 200)
+                 | map(attribute='item') | list }}
+          when: certbot_preflight_bad | length > 0
+
+        # Always, whatever the checks said: nothing of ours belongs in a
+        # directory the CA fetches from. Before the assert, so a failure still
+        # leaves the webroot clean.
+        - name: Remove the probe token
+          ansible.builtin.file:
+            path: "{{ certbot_webroot }}/.well-known/acme-challenge/{{ certbot_preflight_file }}"
+            state: absent
+          become: true
+          changed_when: false
+
+        - name: Fail if a domain does not serve the challenge webroot
+          ansible.builtin.assert:
+            that: certbot_preflight_bad | length == 0
+            quiet: true
+            fail_msg: >-
+              {{ certbot_preflight_bad | join(', ') }} does not serve
+              {{ certbot_webroot }}/.well-known/acme-challenge/ over plain HTTP
+              on {{ inventory_hostname }}, even after reloading nginx, so Let's
+              Encrypt cannot validate it. Asking anyway would spend one of the
+              five failed validations allowed per hostname per hour, so the run
+              stops here instead. Check that sites-enabled holds a vhost naming
+              that domain on port 80 and that its challenge location roots at
+              {{ certbot_webroot }} — `sudo nginx -T | grep -B5 acme-challenge`
+              on the host shows what the running server actually has.
+
+    # `creates` is the whole idempotence story: certbot is run once per lineage,
+    # on the host that does not have it yet, and never again. Renewal is not this
+    # task's job -- certbot.timer below does that twice a day on its own, and
+    # re-running `certonly` on every deploy would issue a duplicate certificate
+    # and walk into the weekly rate limit.
+    #
+    # --cert-name pins the lineage, so /etc/letsencrypt/live/<name>/ stays where
+    # the nginx config expects it even if the domain list changes later.
+    #
+    # "Reload nginx" is the nginx role's handler, not one of this role's: every
+    # role applied in the same play shares a handler namespace, and site.yml
+    # applies nginx immediately before this one.
+    - name: Obtain the certificates
+      ansible.builtin.command:
+        cmd: >-
+          certbot certonly --non-interactive --agree-tos
+          --email {{ certbot_email | quote }}
+          --webroot --webroot-path {{ certbot_webroot | quote }}
+          --cert-name {{ item.name | quote }}
+          {% for domain in item.domains %}-d {{ domain | quote }} {% endfor %}
+          {{ '--staging' if certbot_staging | bool else '' }}
+        creates: "/etc/letsencrypt/live/{{ item.name }}/fullchain.pem"
+      become: true
+      loop: "{{ certbot_certificates }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: certbot_obtained
+      notify: Reload nginx
+
+    # A certificate that has just arrived is of no use while the site naming it
+    # is still disabled, and the nginx role ran before this one -- it looked for
+    # this certificate when it was not there yet. Re-run only that step of it, so
+    # the first deploy of a new edge finishes in one pass rather than needing a
+    # second one to notice.
+    #
+    # `apply` is required, not decoration: without it the tasks of the included
+    # role do not inherit these tags and are all skipped under --tags certbot.
+    - name: Enable the nginx sites that were waiting for a certificate
+      ansible.builtin.include_role:
+        name: nginx
+        tasks_from: tls_sites
+        apply:
+          tags: [certbot, nginx]
+      when: certbot_obtained.changed
+      tags: [certbot, nginx]
+
+    # Shipped by the package -- `certbot -q renew` twice a day, with up to twelve
+    # hours of jitter -- and normally enabled already; this only makes sure of
+    # it, since nothing else here would notice if renewal quietly stopped. The
+    # package's /etc/cron.d/certbot is the fallback for a host without systemd
+    # and skips itself here, so this is not a second renewal running in parallel.
+    - name: Enable the renewal timer
+      ansible.builtin.systemd_service:
+        name: certbot.timer
+        enabled: true
+        state: started
+      become: true
+      # In --check the install above wrote nothing, so on a host that does not
+      # have certbot yet there is no unit to look up and this task fails a dry
+      # run that is otherwise telling the truth. Every real run reaches it.
+      when: not (ansible_check_mode and certbot_installed.changed)
+
+    - name: Read the certificates on the host
+      ansible.builtin.command: certbot certificates
+      become: true
+      register: certbot_state
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Report the certificate state
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ certbot_state.stdout_lines
+             | select('search', 'Certificate Name:|Domains:|Expiry Date:')
+             | map('trim') | list
+             | default(['no certificate on the host'], true) }}
+          {{ '(STAGING — these certificates are not trusted by browsers)'
+             if certbot_staging | bool else '' }}

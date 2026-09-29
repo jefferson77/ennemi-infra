@@ -1,0 +1,21 @@
+#!/bin/sh
+# Installed by roles/certbot to /etc/letsencrypt/renewal-hooks/deploy/.
+#
+# certbot runs every executable in that directory after it has installed a
+# renewed certificate, and only then -- not on a renewal check that decided the
+# certificate was still fresh. Without this, an unattended renewal writes new
+# files that the running nginx never reads, and the site keeps serving the old
+# certificate until something else happens to reload it. Which, on a host whose
+# config only changes when someone deploys, can easily be after it expires.
+#
+# Reload rather than restart: it re-reads the configuration without dropping
+# connections, the same choice the nginx role's handler makes.
+#
+# Exits 0 even when nginx is not running or not installed: this host may hold a
+# certificate for something else entirely, and a non-zero hook makes certbot
+# report the whole renewal as failed.
+if systemctl is-active --quiet nginx; then
+    systemctl reload nginx
+fi
+
+exit 0

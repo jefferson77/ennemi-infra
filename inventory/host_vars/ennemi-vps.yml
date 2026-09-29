@@ -3,7 +3,46 @@
 # other production host and live in group_vars/prod.yml.
 ansible_user: ubuntu
 
-# nginx: nothing real is served here yet, so the VPS gets a placeholder default
-# server instead of the ennemi-brain site configs.
+# nginx: this host is the public edge for ennemi.net and serves the site itself,
+# from /var/www/ennemi-web. Unlike the ennemi-dev edge it is not a forwarder to
+# ennemi-brain, so it terminates TLS here and holds its own certificate.
+#
+# The vhost is two files on purpose, and they are listed under two different
+# variables. See the header of each, and nginx_tls_sites in the role's defaults:
+# the plain-HTTP half names no certificate, so it comes up on a host that has
+# never had one and serves the ACME challenge that gets the first one issued;
+# the TLS half is deployed only once that certificate is on disk.
+#
+# vps-placeholder stays: it owns `listen 80 default_server` and answers for any
+# other name that reaches this machine. Dropping it would leave a stale symlink
+# on the host, which the role does not clean up.
 nginx_sites:
   - vps-placeholder
+  - ennemi-web
+
+nginx_tls_sites:
+  - name: ennemi-web-tls
+    certificate: /etc/letsencrypt/live/www.ennemi.net/fullchain.pem
+
+# The document root of the site above -- the build that is already on this
+# host. Listed so the role makes sure it exists; its content and its ownership
+# stay with the ennemi account that deploys into it, not with this repository.
+nginx_webroots:
+  - /var/www/ennemi-web
+
+# That build ships .br and .gz variants beside every text file, so the vhost
+# uses brotli_static and gzip_static to serve them straight from disk. Those
+# directives need the brotli modules, which this switch installs.
+nginx_brotli: true
+
+# certbot: one certificate covering both names of the vhost, over HTTP-01. Both
+# names must already resolve to this host's public address and reach it on port
+# 80, or the issuance fails -- see the role's defaults for certbot_staging,
+# which is the safe way to try it first.
+certbot_email: nico@data4green.com
+
+certbot_certificates:
+  - name: www.ennemi.net
+    domains:
+      - www.ennemi.net
+      - ennemi.net

@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: certbot
+  author: nico
+  description: Let's Encrypt certificates over HTTP-01, renewed unattended.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []
