@@ -8,7 +8,9 @@ ansible_user: ennemi
 # found on disk -- ennemi.net since repointed at /var/www/webapp, where the
 # webapp's `make deploy` now puts the build (roles/ennemi_webapp). The
 # certificates they reference stay on the host (letsencrypt for ennemi.net,
-# /etc/nginx/ssl for dev.ennemi.net) and are not managed here.
+# /etc/nginx/ssl for dev.ennemi.net) and are not managed here. ennemi.net also
+# answers on internal.ennemi.net, a LAN-only name for development; the
+# letsencrypt lineage www.ennemi.net was expanded by hand to include it.
 nginx_sites:
   - ennemi.net
   - dev.ennemi.net

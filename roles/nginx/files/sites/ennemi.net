@@ -22,6 +22,15 @@ map $http_x_forwarded_proto $ennemi_client_proto {
     ""        $scheme;
 }
 
+# Where the plain-HTTP upgrade sends a client: the name it asked for when that
+# is the development vhost, www otherwise (which also canonicalises the apex).
+# internal.ennemi.net is LAN-only: the venue router resolves it to this host,
+# and the edge on ennemi-dev does not forward it (streams/ennemi.net-tls).
+map $host $ennemi_https_host {
+    internal.ennemi.net   internal.ennemi.net;
+    default               www.ennemi.net;
+}
+
 # Main Application - serves both plain HTTP (direct, or from the edge proxy)
 # and HTTPS (direct, e.g. LAN clients whose DNS points straight at this host).
 server {
@@ -30,15 +39,16 @@ server {
     listen 443 ssl;
     http2 on;
     listen [::]:443 ssl;
-    server_name www.ennemi.net ennemi.net;
+    server_name www.ennemi.net ennemi.net internal.ennemi.net;
 
-    # See the map above. `return` inside `if` at server level is one of the
+    # See the maps above. `return` inside `if` at server level is one of the
     # supported uses of `if` in nginx.
     if ($ennemi_needs_https_redirect) {
-        return 301 https://www.ennemi.net$request_uri;
+        return 301 https://$ennemi_https_host$request_uri;
     }
 
-    # SSL Certificates
+    # SSL Certificates - one lineage for all three names (it renews by DNS-01,
+    # so internal.ennemi.net needs no public record)
     ssl_certificate /etc/letsencrypt/live/www.ennemi.net/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/www.ennemi.net/privkey.pem;
     ssl_trusted_certificate /etc/letsencrypt/live/www.ennemi.net/chain.pem;

@@ -295,7 +295,10 @@ build with `brotli_static`.
 `ennemi-brain`'s two files were copied off the running host byte for byte. `ennemi.net` has
 since been repointed from `/home/ennemi/webapp` to `/var/www/webapp` (its `/_nuxt/`,
 `/images/` and `/audio/` aliases), where the webapp's `make deploy` now puts the build — see
-*The `ennemi_webapp` role*. `dev.ennemi.net` is still the copy as found.
+*The `ennemi_webapp` role*. It also answers on `internal.ennemi.net`, a LAN-only name for
+development: the venue router resolves it to `ennemi-brain`, the edge on `ennemi-dev` does not
+forward it, and the letsencrypt lineage `www.ennemi.net` was expanded by hand (`dns-ovh`) to
+cover it. `dev.ennemi.net` is still the copy as found.
 
 ### Sites that need a certificate (`nginx_tls_sites`)
 
