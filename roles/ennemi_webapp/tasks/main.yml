@@ -45,6 +45,18 @@
   register: ennemi_webapp_entry_stat
   become: true
 
+# no_log: the rendered file is the database password, and --diff would print it.
+- name: Deploy the service environment file
+  ansible.builtin.template:
+    src: ennemi-webapp.env.j2
+    dest: "{{ ennemi_webapp_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  no_log: true
+  notify: Restart ennemi-webapp
+
 # Takes over /etc/systemd/system/ennemi-webapp.service, which was written by
 # hand when the app ran from /home/ennemi/webapp. The old process keeps running
 # until something restarts it, and the handler only does once a build is here.

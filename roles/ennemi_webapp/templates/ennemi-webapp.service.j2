@@ -3,7 +3,8 @@
 # `make deploy`, which restarts this unit afterwards.
 [Unit]
 Description=Ennemi Web Application
-After=network.target dragonfly.service
+After=network.target dragonfly.service {{ ennemi_webapp_database_unit }}
+Wants={{ ennemi_webapp_database_unit }}
 # Enabled before the first deploy, which is harmless: until the build is
 # there, starting the unit is a no-op rather than a failure.
 ConditionPathExists={{ ennemi_webapp_entry }}
@@ -14,6 +15,10 @@ User={{ ennemi_webapp_user }}
 Group={{ ennemi_webapp_group }}
 WorkingDirectory={{ ennemi_webapp_dir }}
 ExecStart={{ ennemi_webapp_node }} --enable-source-maps {{ ennemi_webapp_entry }}
+# NUXT_DATABASE_URL. Read by systemd, as root, so the file can stay root-only.
+# Optional ("-"): without it the app still serves the show, minus the
+# spectacle instances, rather than refusing to start.
+EnvironmentFile=-{{ ennemi_webapp_env_file }}
 Environment=NODE_ENV=production
 Environment=PORT={{ ennemi_webapp_port }}
 {% if ennemi_webapp_network_ip %}

@@ -46,3 +46,20 @@ ennemi_webapp_port: 3000
 ennemi_webapp_network_ip: "{{ ansible_facts['default_ipv4']['address'] | default('') }}"
 
 ennemi_webapp_node: /usr/bin/node
+
+# The PostgreSQL database the app records its spectacle instances in: the
+# postgres role's, on the same host. The name and user must match
+# postgres_app_database / postgres_app_user in roles/postgres, which runs in
+# another play, so its defaults are not visible here. The password is
+# postgres_app_password, read from .env by inventory/group_vars/all.yml.
+#
+# Handed to the service as NUXT_DATABASE_URL in a root-only EnvironmentFile,
+# not an Environment= line: the unit file itself is world-readable. Without a
+# password the file carries no URL, and the app runs with instances disabled.
+ennemi_webapp_env_file: "/etc/{{ ennemi_webapp_service }}.env"
+ennemi_webapp_database_host: 127.0.0.1
+ennemi_webapp_database_port: 5432
+ennemi_webapp_database_name: ennemi
+ennemi_webapp_database_user: ennemi
+# Ordered before the service, so a boot starts the app after its database.
+ennemi_webapp_database_unit: postgresql@18-main.service
