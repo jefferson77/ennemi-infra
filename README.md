@@ -289,7 +289,7 @@ roles/nginx/files/conf.d/    -> /etc/nginx/conf.d/
 | Host           | `nginx_sites`                        | `nginx_tls_sites`   | `nginx_stream_sites` | `nginx_conf_d`     |
 |----------------|--------------------------------------|---------------------|----------------------|--------------------|
 | `ennemi-brain` | `ennemi.net`                         | —                   | —                    | `stub_status.conf` |
-| `ennemi-vps`   | `vps-placeholder`, `ennemi-web`, `ennemi-web-tailnet` | `ennemi-web-tls` | — | `ennemi-web-api.conf` |
+| `ennemi-vps`   | `vps-placeholder`, `ennemi-web`, `ennemi-web-tailnet` | `ennemi-web-tls` | — | `ennemi-web-api.conf`, `ennemi-web-planb.conf` |
 | `ennemi-dev`   | `ennemi.net-edge`                    | —                   | `ennemi.net-tls`     | —                  |
 
 `ennemi-brain` also sets `nginx_brotli: true`: `ennemi.net` serves the webapp's pre-compressed
@@ -355,7 +355,8 @@ both the directives and the package or neither.
 
 The VPS is the public edge, and unlike `ennemi-dev` it is also the web server:
 it terminates TLS itself, with its own Let's Encrypt certificate, and serves the
-site from `/var/www/ennemi-web`. Nothing is forwarded to `ennemi-brain`.
+site from `/var/www/ennemi-web`. Nothing is forwarded to `ennemi-brain`, except
+Plan B phones (see *Plan B* below).
 
 The vhost is **two files**, and the split is the point:
 
@@ -414,7 +415,8 @@ page at `/`, the standalone `/morceau` trailer and the `/admin` page — plus on
 small API under `/api/`, proxied to `ennemi-web-api` on `127.0.0.1:8787` (see
 *The `ennemi_web_api` role*). It stores whether a show is running, which decides
 what `/` shows. The show app itself stays on `ennemi-brain` inside the venue
-network and is not reachable through this site. The content is pushed by that
+network, and only its audience side is reachable through this site, by Plan B
+(below). The content is pushed by that
 project (`make deploy` rsyncs its `dist/` in) and is not managed here, ownership
 included — `nginx_webroots` only makes sure the directory exists.
 
@@ -423,8 +425,10 @@ address, with a burst of five, answered `429` past it — because the `/admin`
 password is typed by a human and may be short, and `POST /api/admin/login` is
 the one endpoint that accepts it (the panel behind it works from an HttpOnly
 session cookie, not the password). Reads are never limited: every
-phone on the landing page polls `GET /api/live`. The `map` and `limit_req_zone`
-behind it are http-context directives, so they live in
+phone on the landing page polls `GET /api/live`. Nor is `POST /api/planb`, the
+Plan B button: it takes no secret, and a theatre full of phones on one mobile
+carrier can share a single address behind its CGNAT. The `map` and
+`limit_req_zone` behind it are http-context directives, so they live in
 `conf.d/ennemi-web-api.conf` (`nginx_conf_d`), not in the site.
 
 Caching is per content type, so a deploy is visible immediately without giving
@@ -478,6 +482,50 @@ for the ACME challenge, and anyone can send `Host: ennemi-vps`, so only the
 tailscale ranges (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) get past it; anything
 else gets `403`. The explicit `server_name` is what routes those requests here
 rather than to `vps-placeholder`'s `default_server`.
+
+**Plan B.** During a show, the landing page is a connection tutorial for phones
+that reached the VPS instead of the venue network. It ends on a Plan B button
+for whoever still cannot get on (a VPN they cannot turn off, say). `ennemi-web`
+answers it with a cookie, `ennemi_planb=<instance id>`, naming the spectacle
+instance that is playing, which the show app sends with `PUT /api/live`. From
+then on, `sites/ennemi-web-tls` forwards that phone to brain over the tailnet,
+to `100.86.27.113:80` as `X-Forwarded-Proto: https`, for as long as that
+instance runs:
+
+- **Every request is checked.** A server-level `if` sends a request carrying
+  the cookie, on a route it may be forwarded for, to `@ennemi_planb`, whose
+  `auth_request` asks the API (`/api/planb/check`, straight to `127.0.0.1:8787`).
+  A `401` clears the cookie and answers a `307` to the same address, which this
+  site then serves itself: the tutorial during a show, the placeholder after.
+- **Only the audience side is forwarded**: `GET` `/`, `/_nuxt/`, `/images/`,
+  `/audio/`, `/favicon.ico` and `/robots.txt`, the socket with the raw query
+  exactly `domain=user`, and the WHEP offer (`POST /live/<stream>/whep`).
+  Anything else is answered by this site, so brain's Control, Stage, REST API,
+  Grafana and Prometheus are never reachable from the internet through it. The
+  show app also refuses non-audience messages on an audience socket.
+- **The normalised URI is what is forwarded** (`rewrite ^ $uri break`), the same
+  one the route map checked, never the raw one the client sent.
+- **The maps are `volatile`.** The `auth_request` subrequest re-runs the
+  server-level `if` and shares the variable cache with the request it checks;
+  a cached `1` would forward the check itself to brain, which answers `200`.
+- **It fails open, not shut.** The API unreachable (a deploy restarting it) lets
+  the cookie through, and brain unreachable is a `502` that keeps the cookie, so
+  the phone's socket reconnects by itself once the tailnet is back.
+- **The cookie's name and `Path`** are `ennemi-web`'s (`server/planb.js`) and
+  are repeated in both files here. Clearing it with another `Path` would leave
+  it in the browser and loop the `307`.
+
+It is a new direction on the tailnet: until now only brain called the VPS, never
+the other way round. Nothing here manages Tailscale ACLs; if the tailnet ever
+gets a custom policy, it must allow `ennemi-vps` to `ennemi-brain:80`. Check it
+from the VPS with
+`curl -H 'Host: www.ennemi.net' -H 'X-Forwarded-Proto: https' http://100.86.27.113/`.
+Nothing changes on brain: its `sites/ennemi.net` serves these requests the way
+it serves a venue phone's.
+
+The live video usually fails for a Plan B phone: the WHEP offer gets through,
+but WebRTC media goes straight between brain and the phone, and nothing relays
+it. That is the "fonctionnalités" the button warns about.
 
 ### The ennemi.net edge on `ennemi-dev`
 

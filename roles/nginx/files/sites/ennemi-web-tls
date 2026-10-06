@@ -7,8 +7,9 @@
 # ACME challenge that gets it fetched, is sites/ennemi-web.
 #
 # This host serves the site from disk -- it is the web server now, not a
-# forwarder to ennemi-brain -- so there is no upstream here and none of the
-# X-Forwarded-Proto care the ennemi-dev edge needs.
+# forwarder to ennemi-brain -- with one exception: Plan B, the section at the
+# end of the server block, forwards the audience side of the show app to brain
+# for a phone holding the Plan B cookie (conf.d/ennemi-web-planb.conf).
 
 server {
     listen 443 ssl;
@@ -129,7 +130,8 @@ server {
     # standalone /morceau trailer and the /admin page. Static files, plus one
     # small API under /api/ (ennemi-web-api, roles/ennemi_web_api) that stores
     # whether a show is running. The show app itself stays on ennemi-brain
-    # inside the venue network, not reachable through this site.
+    # inside the venue network, reachable through this site only by Plan B (at
+    # the end of this block), and only its audience side.
     #
     # The content is pushed by the ennemi-web project, whose scripts/deploy.sh
     # builds and then `rsync -az --delete --rsync-path="sudo rsync"` into this
@@ -220,6 +222,102 @@ server {
         add_header X-Content-Type-Options "nosniff" always;
         add_header X-XSS-Protection "1; mode=block" always;
         try_files $uri $uri/ =404;
+    }
+
+    # --------------------------------------------------------------- Plan B
+    #
+    # A phone holding the Plan B cookie, on one of the routes it may be
+    # forwarded for, is sent to the show app on ennemi-brain over the tailnet
+    # while the cookie names the running instance. Which requests, and why
+    # each map is the way it is: conf.d/ennemi-web-planb.conf.
+    #
+    # The `if` is at server level, so it runs before any location above is
+    # chosen. `return` inside it is one of the supported uses of `if`, and the
+    # 418 is only a way into the named location: nobody is ever answered one.
+    # A second error page, the 401 of the check below, is taken from inside
+    # that named location, which nginx allows only with recursive_error_pages.
+    recursive_error_pages on;
+    error_page 418 = @ennemi_planb;
+    if ($ennemi_planb_requested) {
+        return 418;
+    }
+
+    location @ennemi_planb {
+        auth_request /_ennemi_planb_check;
+        error_page 401 403 500 = @ennemi_planb_off;
+
+        # Forward the normalised URI the route map checked, re-escaped, with
+        # the query appended -- not the raw one the client sent, which the
+        # show app would decode again (`%2F..` and the like).
+        rewrite ^ $uri break;
+
+        proxy_pass http://ennemi_brain;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # What brain's sites/ennemi.net reads to serve the app rather than
+        # redirect to https, and what tells the app its cookies are Secure.
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $ennemi_planb_connection;
+
+        # Fail fast when the tailnet is down: a 502, and the cookie is kept, so
+        # the phone's socket reconnects by itself once brain is back.
+        proxy_connect_timeout 5s;
+        # The socket pings every 20 s; an hour is only a backstop.
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+
+        # brain sends the same four security headers this server block does.
+        # This location sets no add_header of its own, so it inherits those;
+        # hiding brain's copies sends each header once.
+        proxy_hide_header Strict-Transport-Security;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header X-Content-Type-Options;
+        proxy_hide_header X-XSS-Protection;
+
+        expires $ennemi_planb_expires;
+
+        # brain compresses already; the socket must not be touched at all.
+        gzip off;
+        brotli off;
+    }
+
+    # The check, as an auth_request subrequest: 204 if the cookie names the
+    # running instance, 401 otherwise. Straight to the API, so it never meets
+    # the rate limit of location /api/.
+    location = /_ennemi_planb_check {
+        internal;
+        proxy_pass http://127.0.0.1:8787/api/planb/check;
+        # A subrequest inherits the Content-Length of the request it checks
+        # (a WHEP offer has a body); the API would wait for bytes never sent.
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 2s;
+        # The API restarting (an ennemi-web deploy) must not throw every Plan B
+        # phone out mid-show: unreachable, the check passes.
+        error_page 502 504 = @ennemi_planb_check_open;
+    }
+
+    location @ennemi_planb_check_open {
+        return 204;
+    }
+
+    # Not, or no longer, the running instance: clear the cookie and send the
+    # phone to the same address again, which this site then answers itself --
+    # the tutorial during a show, the placeholder after it. The cookie is
+    # cleared with the Path ennemi-web set it with, or the browser keeps it.
+    location @ennemi_planb_off {
+        add_header Set-Cookie "ennemi_planb=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax" always;
+        add_header Cache-Control "no-store" always;
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        return 307 $request_uri;
     }
 }
 

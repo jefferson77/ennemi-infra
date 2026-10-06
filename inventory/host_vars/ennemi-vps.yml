@@ -5,7 +5,9 @@ ansible_user: ubuntu
 
 # nginx: this host is the public edge for ennemi.net and serves the site itself,
 # from /var/www/ennemi-web. Unlike the ennemi-dev edge it is not a forwarder to
-# ennemi-brain, so it terminates TLS here and holds its own certificate.
+# ennemi-brain, so it terminates TLS here and holds its own certificate. The one
+# thing it forwards to brain, over the tailnet, is Plan B: the audience side of
+# the show app, for a phone holding the cookie of the running show.
 #
 # The vhost is two files on purpose, and they are listed under two different
 # variables. See the header of each, and nginx_tls_sites in the role's defaults:
@@ -35,10 +37,12 @@ nginx_tls_sites:
 nginx_webroots:
   - /var/www/ennemi-web
 
-# The rate limit on writes to the live-state API (roles/ennemi_web_api), used
-# by the TLS site. http-context directives, hence conf.d rather than the site.
+# The rate limit on writes to the live-state API (roles/ennemi_web_api), and
+# Plan B's upstream and maps, both used by the TLS site. http-context
+# directives, hence conf.d rather than the site.
 nginx_conf_d:
   - ennemi-web-api.conf
+  - ennemi-web-planb.conf
 
 # That build ships .br and .gz variants beside every text file, so the vhost
 # uses brotli_static and gzip_static to serve them straight from disk. Those
