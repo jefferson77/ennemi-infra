@@ -15,6 +15,17 @@
     quiet: true
   when: not ansible_check_mode
 
+# Without it nobody can log in to the Control desk, so nobody can drive a show;
+# the webapp's deploy refuses to ship a build to a host missing it, too.
+- name: Fail early without a session secret
+  ansible.builtin.assert:
+    that: ennemi_webapp_session_password | length >= 32
+    fail_msg: >-
+      WEBAPP_SESSION_PASSWORD in .env is missing or shorter than 32 characters.
+      It seals the show app's Control login cookie. Generate one with
+      `openssl rand -base64 48`, put it in .env, and run again.
+    quiet: true
+
 # Owned by the service account, unlike nginx_webroots and the ennemi-web-api
 # code directory: the webapp deploy rsyncs into it as that account, and the
 # service writes show content inside it at runtime. 0755 so nginx (www-data)
@@ -45,8 +56,8 @@
   register: ennemi_webapp_entry_stat
   become: true
 
-# no_log: the rendered file holds the database password and ennemi-web's show
-# token, and --diff would print them.
+# no_log: the rendered file holds the database password, the session secret and
+# ennemi-web's show token, and --diff would print them.
 - name: Deploy the service environment file
   ansible.builtin.template:
     src: ennemi-webapp.env.j2
@@ -86,12 +97,12 @@
 - name: Apply any pending restart
   ansible.builtin.meta: flush_handlers
 
-# A real request rather than `systemctl is-active`: listing the spectacles reads
-# content/spectacles relative to the working directory, so a 200 proves the
-# service came up in the right place, not merely that the port is open.
+# A real request rather than `systemctl is-active`: the app's own health route,
+# public and always 200 once the server is up, whatever its database is doing.
+# The spectacles API it used to ask now needs a Control login.
 - name: Check that the webapp answers
   ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ ennemi_webapp_port }}/api/spectacles"
+    url: "http://127.0.0.1:{{ ennemi_webapp_port }}/api/health"
   register: ennemi_webapp_check
   until: ennemi_webapp_check.status == 200
   retries: 5

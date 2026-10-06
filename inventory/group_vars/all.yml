@@ -29,6 +29,13 @@ common_gh_token: >-
             type='properties', file=ennemi_env_file, errors='ignore')
      | default('', true) }}
 
+# Seals the show app's Control login cookie (roles/ennemi_webapp). Required
+# there: the role refuses to run without one of at least 32 characters.
+ennemi_webapp_session_password: >-
+  {{ lookup('ansible.builtin.ini', 'WEBAPP_SESSION_PASSWORD',
+            type='properties', file=ennemi_env_file, errors='ignore')
+     | default('', true) }}
+
 # ennemi-web's SHOW_TOKEN, a copy of the one in that repository's own .env. The
 # show app on ennemi-brain sends it to switch www.ennemi.net (roles/ennemi_webapp).
 # Optional: left out of .env, Play and Stop leave the site alone.

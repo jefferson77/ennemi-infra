@@ -113,6 +113,7 @@ cp .env.example .env      # then fill in the real values
 | `POSTGRES_APP_PASSWORD` | the `ennemi` PostgreSQL role that owns the `ennemi` database |
 | `GITHUB_TOKEN` | the `gh` login the `common` role sets up on every host (optional) |
 | `SHOW_TOKEN` | the show app on `ennemi-brain` switching www.ennemi.net (`ennemi_webapp`, optional) — a copy of `ennemi-web`'s |
+| `WEBAPP_SESSION_PASSWORD` | the show app's Control login cookie (`ennemi_webapp`, required, ≥ 32 characters) |
 
 `inventory/group_vars/all.yml` is the only place that reads the file, with an
 `ini` lookup in `properties` mode, and the path is derived from the inventory
@@ -1061,6 +1062,14 @@ make deploy                                         # the build, the content, th
 systemctl status ennemi-webapp
 journalctl -u ennemi-webapp -f
 ```
+
+**The Control desk needs a login.** The environment file always carries
+`NUXT_SESSION_PASSWORD`, from `WEBAPP_SESSION_PASSWORD` in `.env`, which seals the admin
+session cookie; the role refuses to run without one of at least 32 characters, and the
+webapp's own deploy refuses to ship a build to a host whose unit lacks it. Rotating it logs
+every admin out. The accounts themselves live in Postgres and are the webapp's business
+(`make create-admin-prod` there for the first one). The role's closing check asks the app's
+public `/api/health`.
 
 **www.ennemi.net follows Play and Stop.** When `SHOW_TOKEN` is set in `.env`, the
 environment file also carries `NUXT_WEBSITE_LIVE_URL`
