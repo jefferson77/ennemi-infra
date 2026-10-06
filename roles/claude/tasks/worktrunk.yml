@@ -1,0 +1,289 @@
+---
+# Worktrunk, in five parts: the wt binaries, its bash integration, its user
+# configuration, its Claude Code plugin, and Claude Code's status line. As for
+# Serena, everything runs as the account, stays in its home, and calls each
+# command by its full path.
+
+- name: Locate wt
+  ansible.builtin.set_fact:
+    claude_wt_bin: "{{ claude_home }}/.local/bin/wt"
+
+# --- wt -------------------------------------------------------------------------
+
+# Prints e.g. "wt v0.80.0". Fails, and is let fail, when there is no wt.
+- name: Read the installed Worktrunk
+  ansible.builtin.command: "{{ claude_wt_bin }} --version"
+  become: true
+  become_user: "{{ claude_user }}"
+  register: claude_wt_before
+  changed_when: false
+  failed_when: false
+  check_mode: false   # read-only, must run so --check knows what it compares to
+
+# GitHub answers /releases/latest with a redirect to the tag, which is read
+# rather than the API: api.github.com refuses anonymous callers after a handful
+# of requests (see the dragonfly role).
+- name: Ask GitHub for the newest Worktrunk
+  ansible.builtin.uri:
+    url: "{{ claude_worktrunk_releases_url }}/latest"
+    follow_redirects: none
+    status_code: [301, 302]
+  register: claude_wt_release
+  check_mode: false   # a plain GET, must run so --check knows what it compares to
+
+- name: Settle the installed and the target Worktrunk versions
+  ansible.builtin.set_fact:
+    claude_wt_installed: >-
+      {{ (claude_wt_before.stdout | regex_search('[0-9]+\.[0-9]+\.[0-9]+') | default('', true))
+         if claude_wt_before.rc == 0 else '' }}
+    claude_wt_target: "{{ claude_wt_release.location | default('') | basename | regex_replace('^v', '') }}"
+
+- name: Check that GitHub answered with a release tag
+  ansible.builtin.assert:
+    that: claude_wt_target is match('^[0-9]+\.[0-9]+\.[0-9]+')
+    fail_msg: >-
+      {{ claude_worktrunk_releases_url }}/latest redirected to
+      "{{ claude_wt_release.location | default('nowhere') }}", not a release tag.
+    quiet: true
+
+- name: Report the Worktrunk install this run would perform
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: would install Worktrunk {{ claude_wt_target }}
+      (currently {{ claude_wt_installed or 'not installed' }}).
+  when:
+    - ansible_check_mode
+    - claude_wt_installed | length == 0 or claude_wt_installed is version(claude_wt_target, '<')
+
+# Install and update are the same steps: the release tarball, checked against
+# its .sha256, unpacked in a scratch directory, and its two binaries copied
+# over the ones in ~/.local/bin. Skipped under --check, which has nothing
+# downloaded to work on: the report above stands in for it.
+- name: Install Worktrunk {{ claude_wt_target }}
+  when:
+    - claude_wt_installed | length == 0 or claude_wt_installed is version(claude_wt_target, '<')
+    - not ansible_check_mode
+  vars:
+    claude_wt_archive: worktrunk-{{ claude_worktrunk_arch }}-unknown-linux-musl
+    claude_wt_url: "{{ claude_worktrunk_releases_url }}/download/v{{ claude_wt_target }}/{{ claude_wt_archive }}.tar.xz"
+  block:
+    - name: Create a scratch directory for the Worktrunk release
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .worktrunk-install
+      become: true
+      become_user: "{{ claude_user }}"
+      register: claude_wt_tmp
+
+    - name: Download the Worktrunk release
+      ansible.builtin.get_url:
+        url: "{{ claude_wt_url }}"
+        dest: "{{ claude_wt_tmp.path }}/{{ claude_wt_archive }}.tar.xz"
+        checksum: sha256:{{ claude_wt_url }}.sha256
+        mode: "0600"
+      become: true
+      become_user: "{{ claude_user }}"
+
+    - name: Unpack the Worktrunk release
+      ansible.builtin.unarchive:
+        src: "{{ claude_wt_tmp.path }}/{{ claude_wt_archive }}.tar.xz"
+        dest: "{{ claude_wt_tmp.path }}"
+        remote_src: true
+      become: true
+      become_user: "{{ claude_user }}"
+
+    - name: Install wt and git-wt
+      ansible.builtin.copy:
+        src: "{{ claude_wt_tmp.path }}/{{ claude_wt_archive }}/{{ item }}"
+        dest: "{{ claude_home }}/.local/bin/{{ item }}"
+        remote_src: true
+        mode: "0755"
+      become: true
+      become_user: "{{ claude_user }}"
+      loop: [wt, git-wt]
+
+  always:
+    - name: Remove the Worktrunk release
+      ansible.builtin.file:
+        path: "{{ claude_wt_tmp.path }}"
+        state: absent
+      become: true
+      become_user: "{{ claude_user }}"
+      when: claude_wt_tmp.path is defined
+
+- name: Read the Worktrunk now installed
+  ansible.builtin.command: "{{ claude_wt_bin }} --version"
+  become: true
+  become_user: "{{ claude_user }}"
+  register: claude_wt_after
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check that Worktrunk is on the newest version
+  ansible.builtin.assert:
+    that: (claude_wt_after.stdout | regex_search('[0-9]+\.[0-9]+\.[0-9]+')) is version(claude_wt_target, '>=')
+    fail_msg: >-
+      {{ claude_wt_bin }} reports "{{ claude_wt_after.stdout }}"
+      after the update, not {{ claude_wt_target }}.
+    quiet: true
+  when: not ansible_check_mode
+
+# --- Shell integration ----------------------------------------------------------
+#
+# What `wt config shell install bash` does, written by the role so that --check
+# can show it: one line at the end of ~/.bashrc, after the line there that puts
+# ~/.local/bin on the PATH. A shell opened before it keeps a plain wt until it
+# is restarted.
+- name: Hook Worktrunk into bash
+  ansible.builtin.lineinfile:
+    path: "{{ claude_home }}/.bashrc"
+    line: "{{ claude_worktrunk_bash_line }}"
+    insertafter: EOF
+  become: true
+  become_user: "{{ claude_user }}"
+
+# --- User configuration ---------------------------------------------------------
+#
+# Only on a host that has none, as `serena init`: the file is the user's to
+# tune afterwards (worktree-path, aliases, list columns...).
+- name: Create Worktrunk's configuration directory
+  ansible.builtin.file:
+    path: "{{ claude_home }}/.config/worktrunk"
+    state: directory
+    mode: "0755"
+  become: true
+  become_user: "{{ claude_user }}"
+
+- name: Create Worktrunk's user configuration
+  ansible.builtin.copy:
+    dest: "{{ claude_home }}/.config/worktrunk/config.toml"
+    content: |
+      # Worktrunk user configuration: `wt config show` lists every setting.
+      # Created by ennemi-infra (roles/claude) on a host that had none; the role
+      # never rewrites it, so it is yours to change.
+
+      # Commit messages for `wt merge` and `wt step commit`, by Claude Code.
+      [commit.generation]
+      command = {{ claude_worktrunk_commit_command | to_json }}
+    force: false
+    mode: "0644"
+  become: true
+  become_user: "{{ claude_user }}"
+
+# --- Claude Code: the plugin ----------------------------------------------------
+#
+# The manual equivalent of `wt config plugins claude install`, through `claude
+# plugin` as Serena's server goes through `claude mcp`: the marketplace is
+# added at user scope along with the plugin.
+
+- name: List Claude Code's plugins
+  ansible.builtin.command: "{{ claude_bin }} plugin list --json"
+  become: true
+  become_user: "{{ claude_user }}"
+  register: claude_plugins_before
+  changed_when: false
+  check_mode: false   # read-only, must run so --check knows what it compares to
+
+- name: Find the Worktrunk plugin among them
+  ansible.builtin.set_fact:
+    claude_wt_plugin_before: >-
+      {{ claude_plugins_before.stdout | from_json
+         | selectattr('id', 'equalto', claude_worktrunk_plugin) | first | default({}) }}
+
+- name: Install Worktrunk's Claude Code plugin
+  ansible.builtin.command:
+    argv:
+      - "{{ claude_bin }}"
+      - plugin
+      - install
+      - "{{ claude_worktrunk_plugin.split('@') | first }}"
+      - --marketplace
+      - "{{ claude_worktrunk_marketplace }}"
+      - --scope
+      - user
+  become: true
+  become_user: "{{ claude_user }}"
+  changed_when: true
+  when: claude_wt_plugin_before | length == 0
+
+# Third-party marketplaces are not refreshed on their own, so the role does it,
+# as it keeps wt current: the catalog first, then the plugin from it. Both
+# answer the same whether or not anything moved, so the change is read from
+# the plugin's version before and after.
+- name: Update Worktrunk's Claude Code plugin
+  when:
+    - claude_wt_plugin_before | length > 0
+    - not ansible_check_mode
+  block:
+    - name: Refresh the Worktrunk marketplace
+      ansible.builtin.command: "{{ claude_bin }} plugin marketplace update {{ claude_worktrunk_plugin.split('@') | last }}"
+      become: true
+      become_user: "{{ claude_user }}"
+      changed_when: false
+
+    - name: Update the Worktrunk plugin
+      ansible.builtin.command: "{{ claude_bin }} plugin update {{ claude_worktrunk_plugin }}"
+      become: true
+      become_user: "{{ claude_user }}"
+      changed_when: false
+
+- name: List Claude Code's plugins again
+  ansible.builtin.command: "{{ claude_bin }} plugin list --json"
+  become: true
+  become_user: "{{ claude_user }}"
+  register: claude_plugins_after
+  changed_when: >-
+    claude_wt_plugin_before | length > 0
+    and claude_wt_plugin_listed.version | default('') != claude_wt_plugin_before.version | default('')
+  vars:
+    claude_wt_plugin_listed: >-
+      {{ claude_plugins_after.stdout | from_json
+         | selectattr('id', 'equalto', claude_worktrunk_plugin) | first | default({}) }}
+  when: not ansible_check_mode
+
+- name: Find the Worktrunk plugin now installed
+  ansible.builtin.set_fact:
+    claude_wt_plugin_after: >-
+      {{ claude_plugins_after.stdout | from_json
+         | selectattr('id', 'equalto', claude_worktrunk_plugin) | first | default({}) }}
+  when: not ansible_check_mode
+
+# --- Claude Code: the status line -----------------------------------------------
+#
+# Read after the plugin step, which writes to settings.json itself. The status
+# line is only added where there is none: one set by hand stays.
+
+- name: Read Claude Code's user settings for the status line
+  ansible.builtin.slurp:
+    src: "{{ claude_home }}/.claude/settings.json"
+  register: claude_wt_settings_raw
+  failed_when: false   # no settings.json yet: the status line starts one
+  when: claude_worktrunk_statusline | bool
+
+# Laid out as Claude Code writes it, like the Serena hooks merge.
+- name: Add Worktrunk's status line to the settings  # noqa: risky-file-permissions
+  ansible.builtin.copy:
+    dest: "{{ claude_home }}/.claude/settings.json"
+    content: "{{ claude_wt_settings_wanted | to_nice_json(indent=2, sort_keys=false, ensure_ascii=false) }}\n"
+    backup: true
+  vars:
+    claude_wt_settings: >-
+      {{ (claude_wt_settings_raw.content | b64decode | from_json)
+         if claude_wt_settings_raw.content is defined else {} }}
+    claude_wt_settings_wanted: >-
+      {{ claude_wt_settings
+         | combine({'statusLine': {'type': 'command', 'command': claude_worktrunk_statusline_command}}) }}
+  become: true
+  become_user: "{{ claude_user }}"
+  when:
+    - claude_worktrunk_statusline | bool
+    - "'statusLine' not in claude_wt_settings"
+
+- name: Report the installed Worktrunk
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ claude_wt_after.stdout | default(('wt v' ~ claude_wt_installed) if claude_wt_installed else 'wt not installed yet', true) }}
+      (GitHub: v{{ claude_wt_target }}),
+      Claude Code plugin {{ claude_worktrunk_plugin }}
+      {{ (claude_wt_plugin_after | default(claude_wt_plugin_before)).version | default('not installed yet') }}.

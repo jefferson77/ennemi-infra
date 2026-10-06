@@ -80,3 +80,43 @@ claude_serena_hooks:
       hooks:
         - type: command
           command: serena-hooks cleanup --client=claude-code
+
+# --- Worktrunk ----------------------------------------------------------------
+#
+# Worktrunk (https://github.com/max-sixty/worktrunk): `wt`, a CLI that makes git
+# worktrees as easy as branches, built for running several Claude Code sessions
+# in parallel. Set to false to leave it out of the run entirely; nothing
+# already installed is removed.
+claude_worktrunk_enabled: true
+
+# Upstream ships static (musl) builds on its GitHub releases: a tarball per
+# architecture holding `wt` and `git-wt`, each with a .sha256 next to it. The
+# role installs both into the account's ~/.local/bin, next to claude itself.
+claude_worktrunk_releases_url: https://github.com/max-sixty/worktrunk/releases
+claude_worktrunk_arch: "{{ 'aarch64' if ansible_facts['architecture'] == 'aarch64' else 'x86_64' }}"
+
+# The line `wt config shell install bash` writes to ~/.bashrc, verbatim, so
+# that wt itself sees it as installed. Without it, `wt switch` prints the
+# worktree's path but cannot cd into it.
+claude_worktrunk_bash_line: >-
+  if command -v wt >/dev/null 2>&1; then eval "$(command wt config shell init bash)"; fi
+
+# Commit messages for `wt merge` and `wt step commit`, written by Claude Code:
+# the command Worktrunk's documentation gives for it. It only goes into a
+# ~/.config/worktrunk/config.toml the role creates, on a host that has none;
+# after that the file is the user's.
+claude_worktrunk_commit_command: >-
+  MAX_THINKING_TOKENS=0 claude -p --no-session-persistence --model=haiku
+  --tools='' --safe-mode --setting-sources='user' --system-prompt=''
+
+# Worktrunk's Claude Code plugin, from the marketplace in its own repository:
+# the /worktrunk configuration skill, 🤖/💬 session markers in `wt list`, and
+# hooks that route Claude's own worktrees through `wt switch --create`.
+claude_worktrunk_marketplace: max-sixty/worktrunk
+claude_worktrunk_plugin: worktrunk@worktrunk
+
+# Claude Code's status line from `wt list statusline`: the worktree, its diff
+# and CI state, the model and the context gauge. Only set in a settings.json
+# that has no statusLine yet; one already there is never replaced.
+claude_worktrunk_statusline: true
+claude_worktrunk_statusline_command: wt list statusline --format=claude-code

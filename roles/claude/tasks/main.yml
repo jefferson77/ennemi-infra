@@ -1,18 +1,18 @@
 ---
 # The launcher is in the account's home, and that home is not necessarily the
 # one ansible itself runs from. Tagged serena as well: the Serena tasks need
-# both facts, and --tags=serena would otherwise skip them.
+# both facts, and --tags=serena would otherwise skip them. Same for worktrunk.
 - name: Look up the account's home directory
   ansible.builtin.getent:
     database: passwd
     key: "{{ claude_user }}"
-  tags: [serena]
+  tags: [serena, worktrunk]
 
 - name: Locate the launcher
   ansible.builtin.set_fact:
     claude_home: "{{ ansible_facts['getent_passwd'][claude_user][4] }}"
     claude_bin: "{{ ansible_facts['getent_passwd'][claude_user][4] }}/.local/bin/claude"
-  tags: [serena]
+  tags: [serena, worktrunk]
 
 # Prints e.g. "2.1.284 (Claude Code)". Fails, and is let fail, when there is no
 # claude yet: that is the "install" branch below.
@@ -133,3 +133,10 @@
   ansible.builtin.import_tasks: serena.yml
   when: claude_serena_enabled | bool
   tags: [serena]
+
+# After Serena: the plugin is installed with `claude plugin`, and the status
+# line is merged into the settings.json Serena's hooks may just have rewritten.
+- name: Set up Worktrunk for Claude Code
+  ansible.builtin.import_tasks: worktrunk.yml
+  when: claude_worktrunk_enabled | bool
+  tags: [worktrunk]

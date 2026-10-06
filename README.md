@@ -37,7 +37,7 @@ roles/ennemi_web_api/    # ennemi-web's live-state API, as a systemd service
 roles/ennemi_webapp/     # the show webapp on ennemi-brain, as a systemd service
 roles/dev/               # development-machine toolchain (ennemi-dev only)
 roles/playwright/        # Playwright CLI, browsers and their libraries (ennemi-dev only)
-roles/claude/            # Claude Code + Serena, kept on the newest release (ennemi-dev only)
+roles/claude/            # Claude Code + Serena + Worktrunk, kept on the newest release (ennemi-dev only)
 ```
 
 ## Before the first run
@@ -1200,5 +1200,40 @@ claude mcp get serena           # should say "Connected"
 ```
 
 Set `claude_serena_enabled: false` to leave Serena out of the run.
+
+### Worktrunk (tag `worktrunk`)
+
+[Worktrunk](https://worktrunk.dev) (`wt`) manages git worktrees by branch
+name, so that several Claude Code sessions can work on one project at once
+without stepping on each other. The role installs it after Serena, and keeps
+it on the newest GitHub release:
+
+| Piece | What the role does |
+|---|---|
+| `wt`, `git-wt` (`~/.local/bin`) | the release's static build, checked against its `.sha256`, when missing or older |
+| `~/.bashrc` | the line `wt config shell install bash` adds, so `wt switch` can `cd` |
+| `~/.config/worktrunk/config.toml` | created only if missing, with Claude Code writing commit messages: after that, the file is yours |
+| Claude Code plugin `worktrunk@worktrunk` | installed from the `max-sixty/worktrunk` marketplace, then refreshed and updated on each run |
+| `statusLine`, `~/.claude/settings.json` | `wt list statusline --format=claude-code`, only if no status line is set |
+
+The plugin gives Claude the `/worktrunk` configuration skill and the
+`/wt-switch-create` skill, shows 🤖/💬 next to the worktrees that have a session in
+`wt list`, and makes Claude's own worktrees go through `wt switch --create`.
+Shells and sessions already open pick up the bash integration, the plugin
+and the status line when they are restarted.
+
+```bash
+./deploy --tags=worktrunk      # Worktrunk alone
+wt switch -c -x claude feat    # new branch and worktree, Claude started in it
+wt list                        # every worktree, with its state
+wt merge main                  # squash, rebase, merge into main, clean up
+```
+
+Worktrees go next to the project by default (`~/ennemi-infra.feat`): change
+`worktree-path` in `config.toml` to put them elsewhere. Project hooks (install
+dependencies when a worktree is created, run tests before a merge) live in each
+project's `.config/wt.toml`, not in this role. Set `claude_worktrunk_statusline:
+false` to leave the status line alone, or `claude_worktrunk_enabled: false` to
+leave Worktrunk out of the run.
 
 Variables: see `roles/claude/defaults/main.yml`.
