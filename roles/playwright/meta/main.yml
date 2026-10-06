@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: playwright
+  author: nico
+  description: Playwright CLI, its browsers and their system libraries, for running E2E suites.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

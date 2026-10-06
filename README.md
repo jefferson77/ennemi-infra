@@ -32,10 +32,11 @@ roles/nginx/             # nginx + the per-host site configs
 roles/certbot/           # Let's Encrypt certificates, obtained and renewed
 roles/dragonfly/         # Dragonfly (redis replacement), as a systemd service
 roles/postgres/          # PostgreSQL 18, from the Ubuntu archive
-roles/nodejs/            # Node.js from NodeSource, one major line (ennemi-vps)
+roles/nodejs/            # Node.js from NodeSource, one major line
 roles/ennemi_web_api/    # ennemi-web's live-state API, as a systemd service
 roles/ennemi_webapp/     # the show webapp on ennemi-brain, as a systemd service
 roles/dev/               # development-machine toolchain (ennemi-dev only)
+roles/playwright/        # Playwright CLI, browsers and their libraries (ennemi-dev only)
 ```
 
 ## Before the first run
@@ -891,7 +892,8 @@ Variables: see `roles/postgres/defaults/main.yml`.
 
 ## The `nodejs` role
 
-Node.js on the hosts of the `web_api` and `webapp` groups (the VPS and `ennemi-brain`), from
+Node.js on the hosts of the `web_api` and `webapp` groups (the VPS and `ennemi-brain`), and
+on `ennemi-dev` for the `playwright` role, from
 [NodeSource](https://github.com/nodesource/distributions)'s apt repository —
 one repository per major line, so the host gets `nodejs_major` (24, the major in
 both `ennemi-web`'s and the webapp's `.nvmrc`) and every security release of it through apt, which
@@ -1033,3 +1035,36 @@ earlier in the run, so the install reuses it instead of hitting the network
 again.
 
 Variables: see `roles/dev/defaults/main.yml`.
+
+## The `playwright` role
+
+What the webapp's E2E suite (`make e2e`, `make e2e-local`) needs on `ennemi-dev`
+beyond its own `node_modules`. It runs in the same `dev` play, after `nodejs`.
+
+| | |
+|---|---|
+| CLI | `playwright@1.62.1`, installed globally: `/usr/bin/playwright` |
+| System libraries | whatever `playwright install-deps chromium` lists for this Ubuntu release |
+| Browsers | `chromium` (+ its headless shell), in `~ennemi/.cache/ms-playwright` |
+
+The suite itself still runs the project's own copy through `npx playwright test`;
+the global CLI is there to install the rest and for use outside a project.
+
+**Keep `playwright_version` on the webapp's `package-lock.json`.** Each Playwright
+release looks for one exact browser build in the cache. After an upgrade there,
+bump it here and redeploy, or the suite stops with "Executable doesn't exist".
+
+The libraries step is skipped when `install-deps --dry-run` finds nothing
+missing, so a rerun reports `ok` instead of running `apt-get update` every time.
+
+On this host, nvm still provides `node` and `npx` to an interactive shell. The
+NodeSource `node` from the `nodejs` role, same major, is the one ansible and root
+call.
+
+```bash
+./deploy ennemi-dev --tags=nodejs,playwright   # first time; ./deploy playwright after
+playwright --version
+cd ~/webapp && make e2e-local
+```
+
+Variables: see `roles/playwright/defaults/main.yml`.

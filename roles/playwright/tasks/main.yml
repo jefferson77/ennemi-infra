@@ -1,0 +1,66 @@
+---
+# install-deps drives apt-get itself, with a package list per distribution.
+- name: Fail early on a non-apt distribution
+  ansible.builtin.assert:
+    that: ansible_facts['pkg_mgr'] in ['apt', 'apt_rpm']
+    fail_msg: >-
+      The playwright role installs the browsers' libraries with apt, but
+      {{ inventory_hostname }} reports pkg_mgr={{ ansible_facts['pkg_mgr'] }}.
+    quiet: true
+
+- name: Read the installed Playwright CLI
+  ansible.builtin.command: "{{ playwright_bin }} --version"
+  register: playwright_cli_version
+  changed_when: false
+  failed_when: false
+  check_mode: false   # read-only, must run so --check knows what it compares to
+
+# The playwright package has no install script, so this only fetches the CLI:
+# the browsers are a separate step below.
+- name: Install the Playwright CLI
+  ansible.builtin.command: npm install --global playwright@{{ playwright_version }}
+  become: true
+  when: (playwright_cli_version.stdout | trim) != 'Version ' ~ playwright_version
+
+# The steps below call the CLI. Under --check on a host that never had it there
+# is nothing to call, so they are skipped rather than failed.
+- name: Decide whether the CLI can be called
+  ansible.builtin.set_fact:
+    playwright_cli_ready: "{{ playwright_cli_version.rc == 0 or not ansible_check_mode }}"
+
+# The dry run simulates the apt install and exits 1 when anything is missing,
+# 0 when nothing is. That is the change signal: install-deps itself runs
+# apt-get update every time, and would never report "ok".
+- name: Look for missing system libraries
+  ansible.builtin.command: "{{ playwright_bin }} install-deps --dry-run {{ playwright_browsers | join(' ') }}"
+  register: playwright_deps_check
+  changed_when: false
+  failed_when: playwright_deps_check.rc not in [0, 1]
+  check_mode: false   # read-only, must run so --check reports what it would install
+  when: playwright_cli_ready
+
+- name: Install the system libraries the browsers need
+  ansible.builtin.command: "{{ playwright_bin }} install-deps {{ playwright_browsers | join(' ') }}"
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when:
+    - playwright_cli_ready
+    - playwright_deps_check.rc == 1
+
+# As the account, not root: the browsers land in its own ~/.cache, where the
+# suite will look. Already-present builds are skipped without a word, so only
+# an actual download counts as a change.
+- name: Download the browsers
+  ansible.builtin.command: "{{ playwright_bin }} install {{ playwright_browsers | join(' ') }}"
+  become: true
+  become_user: "{{ playwright_user }}"
+  register: playwright_browser_install
+  changed_when: "'downloaded to' in playwright_browser_install.stdout"
+  when: playwright_cli_ready
+
+- name: Report the installed Playwright
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Playwright {{ playwright_version }},
+      {{ playwright_browsers | join(', ') }} for {{ playwright_user }}.

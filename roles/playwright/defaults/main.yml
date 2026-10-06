@@ -1,0 +1,29 @@
+---
+# Playwright, for the webapp's E2E suite (`make e2e`, `make e2e-local`).
+#
+# The suite runs the project's own copy through `npx playwright test`; what
+# that copy cannot bring along through npm is the rest: the system libraries
+# the browsers link against, and the browser builds themselves. This role
+# provides both, plus a global `playwright` command for use outside a project.
+#
+# Each Playwright release expects one exact browser build, and looks for it in
+# the shared cache under that build's revision number. Keep this on the
+# version in the webapp's package-lock.json, or `npx playwright test` there
+# will not find the browsers installed here.
+playwright_version: "1.62.1"
+
+# Browsers to install, by Playwright's name for them. The webapp's
+# playwright.config.ts only declares a chromium project; "chromium" also
+# brings its headless shell. Add firefox or webkit here if a project needs
+# them.
+playwright_browsers:
+  - chromium
+
+# The global install goes under the NodeSource prefix (roles/nodejs), so it is
+# on root's PATH as well as the account's, whatever nvm puts in front of it in
+# an interactive shell.
+playwright_bin: /usr/bin/playwright
+
+# The account that runs the suite. The browsers are downloaded to its
+# ~/.cache/ms-playwright, which is where Playwright looks for them.
+playwright_user: "{{ common_user | default('ennemi') }}"
