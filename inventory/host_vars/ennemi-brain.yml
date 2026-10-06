@@ -23,8 +23,8 @@ nginx_conf_d:
 # installed by hand here; listing them keeps a rebuilt host startable.
 nginx_brotli: true
 
-# DNS on this host belongs to AdGuard Home, which listens on *:53 and has the
-# systemd-resolved stub disabled to keep that port free. tailscaled must not
-# touch /etc/resolv.conf here; the adguard role forwards the tailnet suffix to
-# the tailscale resolver instead, so MagicDNS still resolves.
-tailscale_accept_dns: false
+# DNS: no AdGuard Home here, so the systemd-resolved stub owns port 53 and
+# tailscale_accept_dns keeps its default. tailscaled then installs the tailnet
+# suffix as split DNS on tailscale0, which is how the webapp reaches
+# ennemi-vps.tail21508.ts.net (roles/ennemi_webapp); the LAN router still
+# answers everything else.

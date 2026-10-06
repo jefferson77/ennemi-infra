@@ -19,8 +19,8 @@ tailscale_service_state: started
 # MagicDNS. Accepting the tailnet DNS configuration is what makes tailnet names
 # resolve, so it is on by default.
 #
-# Turn it off on a host where something else already owns port 53 (ennemi-brain
-# runs AdGuard Home — see roles/adguard). There, tailscaled cannot install
+# Turn it off on a host where something else already owns port 53, such as
+# AdGuard Home (see roles/adguard). There, tailscaled cannot install
 # split DNS and instead falls back to "direct" mode, in which it overwrites
 # /etc/resolv.conf with a file it has no resolver to fill in: DNS breaks and
 # MagicDNS still does not work. The local resolver forwards the tailnet suffix
