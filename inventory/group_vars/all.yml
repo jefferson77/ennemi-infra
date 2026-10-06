@@ -28,3 +28,11 @@ common_gh_token: >-
   {{ lookup('ansible.builtin.ini', 'GITHUB_TOKEN',
             type='properties', file=ennemi_env_file, errors='ignore')
      | default('', true) }}
+
+# ennemi-web's SHOW_TOKEN, a copy of the one in that repository's own .env. The
+# show app on ennemi-brain sends it to switch www.ennemi.net (roles/ennemi_webapp).
+# Optional: left out of .env, Play and Stop leave the site alone.
+ennemi_web_show_token: >-
+  {{ lookup('ansible.builtin.ini', 'SHOW_TOKEN',
+            type='properties', file=ennemi_env_file, errors='ignore')
+     | default('', true) }}

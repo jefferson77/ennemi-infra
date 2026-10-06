@@ -1,0 +1,82 @@
+---
+# Claude Code, the native build, for the account that develops on this host.
+#
+# The native build lives entirely in the account's home: versioned binaries in
+# ~/.local/share/claude/versions/ and a ~/.local/bin/claude symlink to the
+# current one. That is how it was first installed here by hand, so the role
+# adopts that installation as it is and only replaces the version it points at.
+#
+# Claude Code's own auto-updater is off on this host (autoUpdates: false in
+# ~/.claude.json), so this role is what keeps it current: every run brings it
+# to the newest release of the channel below.
+claude_user: "{{ common_user | default('ennemi') }}"
+
+# Release channel to follow: "latest" is every release as it ships, "stable"
+# trails it by about a week and skips releases with known regressions.
+claude_channel: latest
+
+# Anthropic's release server. "<url>/<channel>" answers with the bare version
+# number, which is what the role compares the installed one against.
+claude_release_url: https://downloads.claude.ai/claude-code-releases
+
+# The official installer, only fetched on a host that has no claude at all.
+claude_installer_url: https://claude.ai/install.sh
+
+# --- Serena -------------------------------------------------------------------
+#
+# Serena (https://github.com/oraios/serena): an MCP server that gives Claude
+# Code symbol-aware tools to read and edit code. Set to false to leave Serena
+# out of the run entirely; nothing already installed is removed.
+claude_serena_enabled: true
+
+# Serena is a Python tool installed with uv, both into the account's
+# ~/.local/bin like claude itself. uv comes from Astral's standalone installer,
+# which is what lets `uv self update` keep it current.
+claude_uv_installer_url: https://astral.sh/uv/install.sh
+
+# The package on PyPI, and where the role asks for its newest release.
+claude_serena_package: serena-agent
+claude_serena_index_url: https://pypi.org/pypi/serena-agent/json
+
+# Python for a first install, as Serena's documentation asks; uv fetches it if
+# the host has no such interpreter. An existing install keeps the Python it
+# was made with: upgrades do not move it.
+claude_serena_python: "3.13"
+
+# How Claude Code starts the server: exactly what `serena setup claude-code`
+# registers, at user scope so every project gets it. --project-from-cwd lets
+# Serena pick the project from the directory Claude Code was started in.
+claude_serena_mcp_command: serena
+claude_serena_mcp_args:
+  - start-mcp-server
+  - --context=claude-code
+  - --project-from-cwd
+
+# The hooks Serena's documentation recommends for Claude Code, merged into
+# ~/.claude/settings.json next to whatever else is there:
+#   remind        on every tool call, nudges toward Serena over Read/Grep
+#   auto-approve  lets Serena's own tools through in the auto/acceptEdits modes
+#   activate      at session start, has the agent read Serena's instructions
+#   cleanup       at session end, drops the hook state of that session
+# They are opt-in upstream: remove an entry here to leave it out. Removing one
+# here does not remove it from a settings.json it was already written to.
+claude_serena_hooks:
+  PreToolUse:
+    - matcher: ""
+      hooks:
+        - type: command
+          command: serena-hooks remind --client=claude-code
+    - matcher: "mcp__serena__*"
+      hooks:
+        - type: command
+          command: serena-hooks auto-approve --client=claude-code
+  SessionStart:
+    - matcher: ""
+      hooks:
+        - type: command
+          command: serena-hooks activate --client=claude-code
+  SessionEnd:
+    - matcher: ""
+      hooks:
+        - type: command
+          command: serena-hooks cleanup --client=claude-code

@@ -1,0 +1,133 @@
+---
+# The launcher is in the account's home, and that home is not necessarily the
+# one ansible itself runs from. Tagged serena as well: the Serena tasks need
+# both facts, and --tags=serena would otherwise skip them.
+- name: Look up the account's home directory
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ claude_user }}"
+  tags: [serena]
+
+- name: Locate the launcher
+  ansible.builtin.set_fact:
+    claude_home: "{{ ansible_facts['getent_passwd'][claude_user][4] }}"
+    claude_bin: "{{ ansible_facts['getent_passwd'][claude_user][4] }}/.local/bin/claude"
+  tags: [serena]
+
+# Prints e.g. "2.1.284 (Claude Code)". Fails, and is let fail, when there is no
+# claude yet: that is the "install" branch below.
+- name: Read the installed version
+  ansible.builtin.command: "{{ claude_bin }} --version"
+  become: true
+  become_user: "{{ claude_user }}"
+  register: claude_version_before
+  changed_when: false
+  failed_when: false
+  check_mode: false   # read-only, must run so --check knows what it compares to
+
+- name: Ask the release server for the newest version
+  ansible.builtin.uri:
+    url: "{{ claude_release_url }}/{{ claude_channel }}"
+    return_content: true
+  register: claude_release
+  check_mode: false   # a plain GET, must run so --check knows what it compares to
+
+- name: Settle the installed and the target versions
+  ansible.builtin.set_fact:
+    claude_installed: >-
+      {{ (claude_version_before.stdout.split() | first)
+         if claude_version_before.rc == 0 and claude_version_before.stdout
+         else '' }}
+    claude_target: "{{ claude_release.content | trim }}"
+
+# Anything but a version number (an HTML error page, an empty answer) must stop
+# the role here, before it reaches an install command as its target.
+- name: Check that the release server answered with a version
+  ansible.builtin.assert:
+    that: claude_target is match('^[0-9]+\.[0-9]+\.[0-9]+')
+    fail_msg: >-
+      {{ claude_release_url }}/{{ claude_channel }} answered
+      "{{ claude_target | truncate(60) }}", not a version number.
+    quiet: true
+
+# --- First install: no claude on the host yet --------------------------------
+#
+# The official installer, run as the account (it refuses sudo, and installs
+# into $HOME). It is downloaded to a file and run from there rather than piped
+# into bash, so a truncated download cannot run half a script.
+- name: Install Claude Code
+  when: claude_installed | length == 0
+  block:
+    - name: Create a scratch directory for the installer
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .claude-install
+      become: true
+      become_user: "{{ claude_user }}"
+      register: claude_tmp
+
+    - name: Download the installer
+      ansible.builtin.get_url:
+        url: "{{ claude_installer_url }}"
+        dest: "{{ claude_tmp.path }}/install.sh"
+        mode: "0700"
+      become: true
+      become_user: "{{ claude_user }}"
+
+    - name: Run the installer
+      ansible.builtin.command: bash {{ claude_tmp.path }}/install.sh {{ claude_target }}
+      become: true
+      become_user: "{{ claude_user }}"
+
+  always:
+    - name: Remove the installer
+      ansible.builtin.file:
+        path: "{{ claude_tmp.path }}"
+        state: absent
+      become: true
+      become_user: "{{ claude_user }}"
+      when: claude_tmp.path is defined
+
+# --- Update: claude present, but behind the channel ---------------------------
+#
+# `claude install <version>` is the step the installer itself ends with: it
+# fetches that build into ~/.local/share/claude/versions/ and repoints the
+# launcher at it. A running session keeps the binary it started with, and picks
+# up the new one at its next start.
+- name: Update Claude Code to {{ claude_target }}
+  ansible.builtin.command: "{{ claude_bin }} install {{ claude_target }}"
+  become: true
+  become_user: "{{ claude_user }}"
+  when:
+    - claude_installed | length > 0
+    - claude_installed is version(claude_target, '<')
+
+- name: Read the version now installed
+  ansible.builtin.command: "{{ claude_bin }} --version"
+  become: true
+  become_user: "{{ claude_user }}"
+  register: claude_version_after
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check that the launcher runs the newest version
+  ansible.builtin.assert:
+    that: (claude_version_after.stdout.split() | first) is version(claude_target, '>=')
+    fail_msg: >-
+      {{ claude_bin }} reports "{{ claude_version_after.stdout }}"
+      after the update, not {{ claude_target }}.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Report the installed Claude Code
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Claude Code
+      {{ (claude_version_after.stdout | default(claude_installed, true)).split() | first | default('not installed yet') }}
+      for {{ claude_user }}, {{ claude_channel }} is {{ claude_target }}.
+
+# Serena needs claude in place: it is registered with `claude mcp add`.
+- name: Set up Serena for Claude Code
+  ansible.builtin.import_tasks: serena.yml
+  when: claude_serena_enabled | bool
+  tags: [serena]

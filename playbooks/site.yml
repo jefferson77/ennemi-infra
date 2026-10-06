@@ -92,3 +92,5 @@
       tags: [nodejs]
     - role: playwright
       tags: [playwright]
+    - role: claude
+      tags: [claude]

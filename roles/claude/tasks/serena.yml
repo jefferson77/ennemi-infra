@@ -1,0 +1,264 @@
+---
+# Serena, in four parts: uv, the serena-agent tool itself, its registration as
+# Claude Code's MCP server, and the hooks and CLAUDE.md block that steer Claude
+# toward it. Everything runs as the account and stays in its home; every
+# command is called by its full path, since nvm's or the shell's PATH is not
+# what ansible runs with.
+
+- name: Locate uv and Serena
+  ansible.builtin.set_fact:
+    claude_uv_bin: "{{ claude_home }}/.local/bin/uv"
+    claude_serena_bin: "{{ claude_home }}/.local/bin/serena"
+
+# --- uv -------------------------------------------------------------------------
+
+# Prints e.g. "uv 0.9.18 (...)". Fails, and is let fail, when there is no uv.
+- name: Read the installed uv
+  ansible.builtin.command: "{{ claude_uv_bin }} --version"
+  become: true
+  become_user: "{{ claude_user }}"
+  register: claude_uv_before
+  changed_when: false
+  failed_when: false
+  check_mode: false   # read-only, must run so --check knows what it compares to
+
+# Downloaded to a file and run from there, like Claude Code's installer.
+# UV_NO_MODIFY_PATH: ~/.local/bin is already on the account's PATH (~/.profile),
+# so the installer has no shell file to edit.
+- name: Install uv
+  when: claude_uv_before.rc != 0
+  block:
+    - name: Create a scratch directory for the uv installer
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .uv-install
+      become: true
+      become_user: "{{ claude_user }}"
+      register: claude_uv_tmp
+
+    - name: Download the uv installer
+      ansible.builtin.get_url:
+        url: "{{ claude_uv_installer_url }}"
+        dest: "{{ claude_uv_tmp.path }}/install.sh"
+        mode: "0700"
+      become: true
+      become_user: "{{ claude_user }}"
+
+    - name: Run the uv installer
+      ansible.builtin.command: sh {{ claude_uv_tmp.path }}/install.sh
+      become: true
+      become_user: "{{ claude_user }}"
+      environment:
+        UV_NO_MODIFY_PATH: "1"
+
+  always:
+    - name: Remove the uv installer
+      ansible.builtin.file:
+        path: "{{ claude_uv_tmp.path }}"
+        state: absent
+      become: true
+      become_user: "{{ claude_user }}"
+      when: claude_uv_tmp.path is defined
+
+# uv answers "already on the latest version" without touching anything, so the
+# change is read from the version before and after rather than from its output.
+- name: Update uv
+  ansible.builtin.command: "{{ claude_uv_bin }} self update"
+  become: true
+  become_user: "{{ claude_user }}"
+  register: claude_uv_update
+  changed_when: false
+  when: claude_uv_before.rc == 0
+
+- name: Read the uv now installed
+  ansible.builtin.command: "{{ claude_uv_bin }} --version"
+  become: true
+  become_user: "{{ claude_user }}"
+  register: claude_uv_after
+  changed_when: (claude_uv_after.stdout | default('')) != (claude_uv_before.stdout | default(''))
+  when: not ansible_check_mode
+
+# --- serena-agent ---------------------------------------------------------------
+
+# Prints e.g. "Serena 1.7.0".
+- name: Read the installed Serena
+  ansible.builtin.command: "{{ claude_serena_bin }} --version"
+  become: true
+  become_user: "{{ claude_user }}"
+  register: claude_serena_before
+  changed_when: false
+  failed_when: false
+  check_mode: false   # read-only, must run so --check knows what it compares to
+
+- name: Ask PyPI for the newest Serena
+  ansible.builtin.uri:
+    url: "{{ claude_serena_index_url }}"
+    return_content: true
+  register: claude_serena_release
+  check_mode: false   # a plain GET, must run so --check knows what it compares to
+
+- name: Settle the installed and the target Serena versions
+  ansible.builtin.set_fact:
+    claude_serena_installed: >-
+      {{ (claude_serena_before.stdout.split() | last)
+         if claude_serena_before.rc == 0 and claude_serena_before.stdout
+         else '' }}
+    claude_serena_target: "{{ claude_serena_release.json.info.version }}"
+
+- name: Install Serena
+  ansible.builtin.command: >-
+    {{ claude_uv_bin }} tool install
+    --python {{ claude_serena_python }} {{ claude_serena_package }}
+  become: true
+  become_user: "{{ claude_user }}"
+  when: claude_serena_installed | length == 0
+
+- name: Update Serena to {{ claude_serena_target }}
+  ansible.builtin.command: "{{ claude_uv_bin }} tool upgrade {{ claude_serena_package }}"
+  become: true
+  become_user: "{{ claude_user }}"
+  when:
+    - claude_serena_installed | length > 0
+    - claude_serena_installed is version(claude_serena_target, '<')
+
+- name: Read the Serena now installed
+  ansible.builtin.command: "{{ claude_serena_bin }} --version"
+  become: true
+  become_user: "{{ claude_user }}"
+  register: claude_serena_after
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check that Serena is on the newest version
+  ansible.builtin.assert:
+    that: (claude_serena_after.stdout.split() | last) is version(claude_serena_target, '>=')
+    fail_msg: >-
+      {{ claude_serena_bin }} reports "{{ claude_serena_after.stdout }}"
+      after the update, not {{ claude_serena_target }}.
+    quiet: true
+  when: not ansible_check_mode
+
+# Creates ~/.serena/serena_config.yml with the defaults. Only on a host that
+# has none: the file is the user's to tune afterwards (dashboard, projects...).
+- name: Create Serena's global configuration
+  ansible.builtin.command: "{{ claude_serena_bin }} init"
+  args:
+    creates: "{{ claude_home }}/.serena/serena_config.yml"
+  become: true
+  become_user: "{{ claude_user }}"
+
+# --- Claude Code: the MCP server ------------------------------------------------
+#
+# User-scope MCP servers live in ~/.claude.json, which Claude Code rewrites all
+# the time. So the role only reads it, and goes through `claude mcp` to change
+# it rather than writing the file underneath a running session.
+
+- name: Look for Claude Code's user configuration
+  ansible.builtin.stat:
+    path: "{{ claude_home }}/.claude.json"
+  register: claude_json_stat
+
+- name: Read Claude Code's user configuration
+  ansible.builtin.slurp:
+    src: "{{ claude_home }}/.claude.json"
+  register: claude_json_raw
+  when: claude_json_stat.stat.exists
+
+- name: Compare the registered Serena server with the wanted one
+  ansible.builtin.set_fact:
+    claude_serena_mcp_current: >-
+      {{ ((claude_json_raw.content | b64decode | from_json).mcpServers | default({})).serena | default({})
+         if claude_json_stat.stat.exists else {} }}
+
+- name: Drop a Serena server registered differently
+  ansible.builtin.command: "{{ claude_bin }} mcp remove --scope user serena"
+  become: true
+  become_user: "{{ claude_user }}"
+  when:
+    - claude_serena_mcp_current | length > 0
+    - claude_serena_mcp_current.command | default('') != claude_serena_mcp_command
+      or claude_serena_mcp_current.args | default([]) != claude_serena_mcp_args
+
+- name: Register Serena as Claude Code's MCP server
+  ansible.builtin.command:
+    argv: >-
+      {{ [claude_bin, 'mcp', 'add', '--scope', 'user', 'serena', '--', claude_serena_mcp_command]
+         + claude_serena_mcp_args }}
+  become: true
+  become_user: "{{ claude_user }}"
+  when: >-
+    claude_serena_mcp_current.command | default('') != claude_serena_mcp_command
+    or claude_serena_mcp_current.args | default([]) != claude_serena_mcp_args
+
+# --- Claude Code: hooks ---------------------------------------------------------
+#
+# ~/.claude/settings.json also holds the user's own settings, so the hooks are
+# merged into it: each entry is added where it is missing, and every other key
+# and hook is left as it is. The file is only rewritten when that changes it.
+
+- name: Look for Claude Code's user settings
+  ansible.builtin.stat:
+    path: "{{ claude_home }}/.claude/settings.json"
+  register: claude_settings_stat
+
+- name: Read Claude Code's user settings
+  ansible.builtin.slurp:
+    src: "{{ claude_home }}/.claude/settings.json"
+  register: claude_settings_raw
+  when: claude_settings_stat.stat.exists
+
+# append_rp: the wanted entries go at the end of each event's list, and an
+# identical entry already there is not repeated.
+- name: Merge Serena's hooks into the settings
+  ansible.builtin.set_fact:
+    claude_settings_current: "{{ claude_settings_now }}"
+    claude_settings_wanted: >-
+      {{ claude_settings_now
+         | combine({'hooks': claude_serena_hooks}, recursive=true, list_merge='append_rp') }}
+  vars:
+    claude_settings_now: >-
+      {{ (claude_settings_raw.content | b64decode | from_json)
+         if claude_settings_stat.stat.exists else {} }}
+
+- name: Create Claude Code's settings directory
+  ansible.builtin.file:
+    path: "{{ claude_home }}/.claude"
+    state: directory
+  become: true
+  become_user: "{{ claude_user }}"
+
+# Laid out the way Claude Code writes it itself: two-space indent, keys in
+# their original order, non-ASCII left as is. No mode: an existing file keeps
+# its own, a new one gets the account's umask, as Claude Code would give it.
+- name: Write the merged settings
+  ansible.builtin.copy:
+    dest: "{{ claude_home }}/.claude/settings.json"
+    content: "{{ claude_settings_wanted | to_nice_json(indent=2, sort_keys=false, ensure_ascii=false) }}\n"
+    backup: true
+  become: true
+  become_user: "{{ claude_user }}"
+  when: claude_settings_wanted != claude_settings_current
+
+# --- Claude Code: instructions --------------------------------------------------
+#
+# The user-level CLAUDE.md applies to every project, as the MCP server does.
+# Only the block between the markers is the role's; anything else in the file
+# is the user's and kept.
+- name: Tell Claude how to use Serena
+  ansible.builtin.blockinfile:
+    path: "{{ claude_home }}/.claude/CLAUDE.md"
+    block: "{{ lookup('ansible.builtin.file', 'CLAUDE.serena.md') }}"
+    marker: "<!-- {mark} Serena, managed by ennemi-infra (roles/claude) -->"
+    create: true
+    mode: "0644"
+  become: true
+  become_user: "{{ claude_user }}"
+
+- name: Report the installed Serena
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}:
+      {{ claude_serena_after.stdout | default('Serena ' ~ (claude_serena_installed or 'not installed yet'), true) }}
+      (PyPI: {{ claude_serena_target }}),
+      {{ claude_uv_after.stdout | default(claude_uv_before.stdout, true) | default('no uv yet', true) }},
+      registered as an MCP server with {{ claude_serena_hooks.keys() | join(', ') }} hooks.

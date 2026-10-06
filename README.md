@@ -37,6 +37,7 @@ roles/ennemi_web_api/    # ennemi-web's live-state API, as a systemd service
 roles/ennemi_webapp/     # the show webapp on ennemi-brain, as a systemd service
 roles/dev/               # development-machine toolchain (ennemi-dev only)
 roles/playwright/        # Playwright CLI, browsers and their libraries (ennemi-dev only)
+roles/claude/            # Claude Code + Serena, kept on the newest release (ennemi-dev only)
 ```
 
 ## Before the first run
@@ -111,6 +112,7 @@ cp .env.example .env      # then fill in the real values
 |-----|---------|
 | `POSTGRES_APP_PASSWORD` | the `ennemi` PostgreSQL role that owns the `ennemi` database |
 | `GITHUB_TOKEN` | the `gh` login the `common` role sets up on every host (optional) |
+| `SHOW_TOKEN` | the show app on `ennemi-brain` switching www.ennemi.net (`ennemi_webapp`, optional) — a copy of `ennemi-web`'s |
 
 `inventory/group_vars/all.yml` is the only place that reads the file, with an
 `ini` lookup in `properties` mode, and the path is derived from the inventory
@@ -287,7 +289,7 @@ roles/nginx/files/conf.d/    -> /etc/nginx/conf.d/
 | Host           | `nginx_sites`                        | `nginx_tls_sites`   | `nginx_stream_sites` | `nginx_conf_d`     |
 |----------------|--------------------------------------|---------------------|----------------------|--------------------|
 | `ennemi-brain` | `ennemi.net`                         | —                   | —                    | `stub_status.conf` |
-| `ennemi-vps`   | `vps-placeholder`, `ennemi-web`  | `ennemi-web-tls`| —                    | —                  |
+| `ennemi-vps`   | `vps-placeholder`, `ennemi-web`, `ennemi-web-tailnet` | `ennemi-web-tls` | — | `ennemi-web-api.conf` |
 | `ennemi-dev`   | `ennemi.net-edge`                    | —                   | `ennemi.net-tls`     | —                  |
 
 `ennemi-brain` also sets `nginx_brotli: true`: `ennemi.net` serves the webapp's pre-compressed
@@ -932,9 +934,12 @@ the state; `ennemi-web` owns the code *and its secrets*, and restarts the unit
 after each deploy. So the role creates an empty directory — existence only, as
 `nginx_webroots` does — and a unit with `ConditionPathExists` on the entry
 point, which is enabled straight away and simply does not start until the first
-code deploy fills it. **Nothing secret is in this repository or its `.env`**: the
-admin password and the show token are changed in `ennemi-web`'s `.env`, then
-`make deploy` there.
+code deploy fills it. **None of the VPS's secrets is managed here**: the admin
+password and the show token are changed in `ennemi-web`'s `.env`, then
+`make deploy` there. The show token has one other holder, the show app on
+brain, whose copy is `SHOW_TOKEN` in this repository's `.env` (see
+*The `ennemi_webapp` role*) — so rotating it means both `.env` files, both
+deploys.
 
 The state lives under `/var/lib`, created by systemd, never in the code
 directory: that one is rsynced with `--delete`. The unit is hardened beyond what
@@ -1009,6 +1014,20 @@ systemctl status ennemi-webapp
 journalctl -u ennemi-webapp -f
 ```
 
+**www.ennemi.net follows Play and Stop.** When `SHOW_TOKEN` is set in `.env`, the
+environment file also carries `NUXT_WEBSITE_LIVE_URL`
+(`ennemi_webapp_website_live_url`, `http://ennemi-vps.tail21508.ts.net/api/live`) and
+`NUXT_WEBSITE_SHOW_TOKEN`, and the app sends `PUT /api/live` to the VPS on every Play and
+Stop, and once at boot. It goes over the tailnet by the VPS's full MagicDNS name: brain moves
+between venue networks, and from brain `www.ennemi.net` resolves to brain itself. The
+`ennemi-web-tailnet` site on the VPS answers that name to tailnet addresses only. Nothing else
+is needed on either host — no firewall, no `tailscale serve`.
+
+```bash
+journalctl -u ennemi-webapp | grep www.ennemi.net        # one line per switch, or why not
+curl -s http://ennemi-vps.tail21508.ts.net/api/live      # from brain: {"live":false}
+```
+
 Restarting the service drops every connected phone and stage display — neither this role
 nor the webapp deploy should run during a show.
 
@@ -1068,3 +1087,70 @@ cd ~/webapp && make e2e-local
 ```
 
 Variables: see `roles/playwright/defaults/main.yml`.
+
+## The `claude` role
+
+Claude Code on `ennemi-dev`, for the `ennemi` account, kept on the newest release.
+It runs in the `dev` play, after `playwright`.
+
+It is the [native build](https://code.claude.com/docs): versioned binaries in
+`~/.local/share/claude/versions/` and a `~/.local/bin/claude` symlink to the
+current one. Each run asks the release server for the newest version on
+`claude_channel` (`latest`), and then:
+
+| On the host | The role |
+|---|---|
+| no `claude` | downloads `install.sh` to a scratch directory and runs it as `ennemi` |
+| an older version | `claude install <newest>`, which adds that build and repoints the symlink |
+| the newest version | nothing: the run reports `ok` |
+
+The first case is for a rebuilt machine. The hand-made install already on this
+host is taken over as it is, never reinstalled. Claude Code's own auto-updater is
+off here (`autoUpdates: false` in `~/.claude.json`), so the role is what keeps it
+current. Sessions already running keep their binary, and use the new one from
+their next start.
+
+```bash
+./deploy claude
+claude --version
+```
+
+Set `claude_channel: stable` to follow the release that trails `latest` by
+about a week.
+
+### Serena (tag `serena`)
+
+[Serena](https://github.com/oraios/serena) is an MCP server that gives Claude Code
+symbol-aware tools to read and edit code. The same role installs it and wires it
+in, after Claude Code itself. Each piece is adopted as it is when it is already
+there:
+
+| Piece | What the role does |
+|---|---|
+| `uv` (`~/.local/bin`) | installs it with Astral's installer if missing, then `uv self update` |
+| `serena-agent` | `uv tool install -p 3.13` if missing, `uv tool upgrade` when PyPI has newer |
+| `~/.serena/serena_config.yml` | `serena init` only if missing: after that, the file is yours |
+| MCP server, user scope | `claude mcp add`, as `serena setup claude-code` does, unless already the same |
+| Hooks, `~/.claude/settings.json` | merges in the four Serena recommends, and leaves every other key alone |
+| `~/.claude/CLAUDE.md` | a managed block on when to use Serena and when not to |
+
+The hooks are `remind` and `auto-approve` (`PreToolUse`), `activate`
+(`SessionStart`) and `cleanup` (`SessionEnd`). Remove an entry from
+`claude_serena_hooks` to stop adding it. Settings that already exist on the
+host are never removed. When the merge changes `settings.json`, the previous
+version is kept next to it as `settings.json.<pid>.<date>~`.
+
+`CLAUDE.md` is only the role's between its `BEGIN`/`END Serena` markers.
+Write your own instructions outside them. The text comes from
+`roles/claude/files/CLAUDE.serena.md`. Language servers are not part of
+the role: Serena downloads the ones a project's `.serena/project.yml` lists
+the first time that project is opened.
+
+```bash
+./deploy --tags=serena          # Serena alone, without the Claude Code update
+claude mcp get serena           # should say "Connected"
+```
+
+Set `claude_serena_enabled: false` to leave Serena out of the run.
+
+Variables: see `roles/claude/defaults/main.yml`.

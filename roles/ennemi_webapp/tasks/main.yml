@@ -45,7 +45,8 @@
   register: ennemi_webapp_entry_stat
   become: true
 
-# no_log: the rendered file is the database password, and --diff would print it.
+# no_log: the rendered file holds the database password and ennemi-web's show
+# token, and --diff would print them.
 - name: Deploy the service environment file
   ansible.builtin.template:
     src: ennemi-webapp.env.j2

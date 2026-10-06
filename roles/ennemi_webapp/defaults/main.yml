@@ -63,3 +63,14 @@ ennemi_webapp_database_name: ennemi
 ennemi_webapp_database_user: ennemi
 # Ordered before the service, so a boot starts the app after its database.
 ennemi_webapp_database_unit: postgresql@18-main.service
+
+# ennemi-web's live-state API, which Play and Stop switch so www.ennemi.net
+# shows its connection tutorial only while a show runs. Reached over the
+# tailnet, by the full MagicDNS name: brain moves between venue networks, and
+# from brain www.ennemi.net resolves to brain itself. The ennemi-web-tailnet
+# nginx site on ennemi-vps answers this name to tailnet addresses only.
+#
+# Handed over as NUXT_WEBSITE_LIVE_URL / NUXT_WEBSITE_SHOW_TOKEN in the same
+# EnvironmentFile, and only when ennemi_web_show_token (SHOW_TOKEN in .env) is
+# set: without it the app leaves the site alone.
+ennemi_webapp_website_live_url: http://ennemi-vps.tail21508.ts.net/api/live
