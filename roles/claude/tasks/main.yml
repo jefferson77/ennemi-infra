@@ -78,6 +78,7 @@
       ansible.builtin.command: bash {{ claude_tmp.path }}/install.sh {{ claude_target }}
       become: true
       become_user: "{{ claude_user }}"
+      changed_when: true
 
   always:
     - name: Remove the installer
@@ -98,6 +99,7 @@
   ansible.builtin.command: "{{ claude_bin }} install {{ claude_target }}"
   become: true
   become_user: "{{ claude_user }}"
+  changed_when: true
   when:
     - claude_installed | length > 0
     - claude_installed is version(claude_target, '<')

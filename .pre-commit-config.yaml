@@ -1,0 +1,15 @@
+---
+# Git pre-commit hooks. Install once per clone with:
+#   uv tool install pre-commit && uv tool install ansible-lint
+#   pre-commit install
+# Uses the ansible-lint on PATH, so it sees the same collections and settings
+# (.ansible-lint) as a manual run.
+repos:
+  - repo: local
+    hooks:
+      - id: ansible-lint
+        name: ansible-lint
+        entry: ansible-lint
+        language: system
+        files: \.(yml|yaml)$
+        exclude: ^(\.ansible|\.claude|\.serena|collections)/

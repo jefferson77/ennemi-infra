@@ -30,7 +30,7 @@
 
 # Owner only, no mode: the deploy's rsync -a carries the modes over from the
 # repository, and asserting one here would flip them back on every run.
-- name: Create the directories the service writes to
+- name: Create the directories the service writes to  # noqa: risky-file-permissions
   ansible.builtin.file:
     path: "{{ ennemi_webapp_dir }}/{{ item }}"
     state: directory
@@ -106,10 +106,7 @@
       {{ inventory_hostname }}:
       {% if ennemi_webapp_check is not skipped -%}
       {{ ennemi_webapp_service }} answering on 127.0.0.1:{{ ennemi_webapp_port }},
-      serving {{ ennemi_webapp_dir }}.
-      {%- elif ennemi_webapp_entry_stat.stat.exists -%}
-      {{ ennemi_webapp_service }} enabled (not checked under --check).
-      {%- else -%}
+      serving {{ ennemi_webapp_dir }}.{%- elif ennemi_webapp_entry_stat.stat.exists -%}
+      {{ ennemi_webapp_service }} enabled (not checked under --check).{%- else -%}
       {{ ennemi_webapp_service }} enabled, waiting for its build: run `make deploy`
-      in the webapp repository to push it.
-      {%- endif %}
+      in the webapp repository to push it.{%- endif %}

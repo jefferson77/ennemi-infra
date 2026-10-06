@@ -32,7 +32,7 @@
   environment:
     DEBIAN_FRONTEND: noninteractive
 
-- name: Look for the {{ postgres_cluster }} cluster
+- name: Look for the cluster {{ postgres_cluster }}
   ansible.builtin.stat:
     path: "{{ postgres_conf_dir }}/postgresql.conf"
   register: postgres_cluster_conf
@@ -42,7 +42,7 @@
 # this normally never runs. It is here for the host where the cluster was
 # dropped, or where createcluster.conf turns that off: without it the rest of
 # the role would have nothing to configure.
-- name: Create the {{ postgres_cluster }} cluster
+- name: Create the cluster {{ postgres_cluster }}
   ansible.builtin.command:
     cmd: "pg_createcluster {{ postgres_version }} {{ postgres_cluster }} --start"
   become: true
@@ -167,7 +167,7 @@
         # No task-level no_log: the module declares its own password argument
         # as no_log, so ansible censors that one value and nothing else. Hiding
         # the whole task would only make a failure here unreadable.
-        - name: Create the {{ postgres_app_user }} role
+        - name: Create the database role {{ postgres_app_user }}
           community.postgresql.postgresql_user:
             name: "{{ postgres_app_user }}"
             password: "{{ postgres_app_password }}"
@@ -182,7 +182,7 @@
         #
         # Encoding and locale are inherited from template1 (UTF8, en_US.UTF-8);
         # naming them here would only add a way for the two to disagree.
-        - name: Create the {{ postgres_app_database }} database
+        - name: Create the database {{ postgres_app_database }}
           community.postgresql.postgresql_db:
             name: "{{ postgres_app_database }}"
             owner: "{{ postgres_app_user }}"

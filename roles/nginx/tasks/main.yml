@@ -72,7 +72,7 @@
 # ennemi account -- and taking it over as www-data here would break exactly that
 # on the next run. Ansible leaves an existing directory's ownership alone when
 # none is given, and a new one is created root-owned, which nginx can read.
-- name: Create the document roots
+- name: Create the document roots  # noqa: risky-file-permissions
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory

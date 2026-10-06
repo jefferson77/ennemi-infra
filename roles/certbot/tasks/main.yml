@@ -228,7 +228,10 @@
     #
     # `apply` is required, not decoration: without it the tasks of the included
     # role do not inherit these tags and are all skipped under --tags certbot.
-    - name: Enable the nginx sites that were waiting for a certificate
+    #
+    # Not a handler: it has to run here, with its tags applied, rather than at
+    # the end of the play after "Reload nginx" has already fired.
+    - name: Enable the nginx sites that were waiting for a certificate  # noqa: no-handler
       ansible.builtin.include_role:
         name: nginx
         tasks_from: tls_sites

@@ -7,7 +7,7 @@
       {{ inventory_hostname }} reports pkg_mgr={{ ansible_facts['pkg_mgr'] }}.
     quiet: true
 
-- name: Create the {{ common_user }} account
+- name: Create the user account {{ common_user }}
   ansible.builtin.user:
     name: "{{ common_user }}"
     shell: "{{ common_user_shell }}"
@@ -28,7 +28,7 @@
   become: true
   tags: [user]
 
-- name: Grant {{ common_user }} passwordless sudo
+- name: Grant passwordless sudo to {{ common_user }}
   ansible.builtin.copy:
     dest: "/etc/sudoers.d/{{ common_user }}"
     content: "{{ common_user }} ALL=(ALL) NOPASSWD:ALL\n"
@@ -89,7 +89,7 @@
 # The token gh already holds, so the login below runs on a fresh host and on a
 # rotated token, and is skipped on every other run. Non-zero rc and empty
 # output both mean "no token", which the comparison handles on its own.
-- name: Read the token {{ common_user }} is already logged in with
+- name: Read the GitHub token already held by {{ common_user }}
   ansible.builtin.command: gh auth token --hostname github.com
   become: true
   become_user: "{{ common_user }}"
@@ -100,8 +100,8 @@
   no_log: true
   tags: [packages, gh]
 
-- name: Log {{ common_user }} in to GitHub
-  ansible.builtin.shell:
+- name: Log in to GitHub as {{ common_user }}
+  ansible.builtin.command:
     cmd: gh auth login --hostname github.com --with-token
     stdin: "{{ common_gh_token }}"
   become: true

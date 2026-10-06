@@ -1,0 +1,14 @@
+---
+# ansible-lint configuration. Runs from the Claude Code PostToolUse hook
+# (.claude/hooks/ansible-lint.sh) on every edited file, and from the git
+# pre-commit hook (.pre-commit-config.yaml) on every staged file.
+profile: production
+
+exclude_paths:
+  - .ansible/
+  - .claude/
+  - .serena/
+  - collections/
+
+# A deliberate exception is marked on its task with `# noqa: <rule>` and a
+# comment saying why, never added to a skip list for the whole repository.

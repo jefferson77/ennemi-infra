@@ -20,7 +20,7 @@
 # sudo), and asserting an owner here would fight what that brings with it on
 # every run. A new directory is created root-owned, which is what the service
 # needs: it only reads it.
-- name: Create the code directory
+- name: Create the code directory  # noqa: risky-file-permissions
   ansible.builtin.file:
     path: "{{ ennemi_web_api_dir }}"
     state: directory
@@ -76,10 +76,7 @@
       {{ inventory_hostname }}:
       {% if ennemi_web_api_check is not skipped -%}
       {{ ennemi_web_api_service }} answering on {{ ennemi_web_api_host }}:{{ ennemi_web_api_port }},
-      live={{ ennemi_web_api_check.json.live }}.
-      {%- elif ennemi_web_api_entry_stat.stat.exists -%}
-      {{ ennemi_web_api_service }} enabled (not checked under --check).
-      {%- else -%}
+      live={{ ennemi_web_api_check.json.live }}.{%- elif ennemi_web_api_entry_stat.stat.exists -%}
+      {{ ennemi_web_api_service }} enabled (not checked under --check).{%- else -%}
       {{ ennemi_web_api_service }} enabled, waiting for its code: run `make deploy`
-      in ennemi-web to push it.
-      {%- endif %}
+      in ennemi-web to push it.{%- endif %}

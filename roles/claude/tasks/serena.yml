@@ -50,6 +50,7 @@
       become_user: "{{ claude_user }}"
       environment:
         UV_NO_MODIFY_PATH: "1"
+      changed_when: true
 
   always:
     - name: Remove the uv installer
@@ -111,12 +112,14 @@
     --python {{ claude_serena_python }} {{ claude_serena_package }}
   become: true
   become_user: "{{ claude_user }}"
+  changed_when: true
   when: claude_serena_installed | length == 0
 
 - name: Update Serena to {{ claude_serena_target }}
   ansible.builtin.command: "{{ claude_uv_bin }} tool upgrade {{ claude_serena_package }}"
   become: true
   become_user: "{{ claude_user }}"
+  changed_when: true
   when:
     - claude_serena_installed | length > 0
     - claude_serena_installed is version(claude_serena_target, '<')
@@ -174,6 +177,7 @@
   ansible.builtin.command: "{{ claude_bin }} mcp remove --scope user serena"
   become: true
   become_user: "{{ claude_user }}"
+  changed_when: true
   when:
     - claude_serena_mcp_current | length > 0
     - claude_serena_mcp_current.command | default('') != claude_serena_mcp_command
@@ -186,6 +190,7 @@
          + claude_serena_mcp_args }}
   become: true
   become_user: "{{ claude_user }}"
+  changed_when: true
   when: >-
     claude_serena_mcp_current.command | default('') != claude_serena_mcp_command
     or claude_serena_mcp_current.args | default([]) != claude_serena_mcp_args
@@ -220,7 +225,9 @@
       {{ (claude_settings_raw.content | b64decode | from_json)
          if claude_settings_stat.stat.exists else {} }}
 
-- name: Create Claude Code's settings directory
+# No mode, for the same reason as the settings file below: Claude Code made
+# this directory, and it keeps whatever mode it was given.
+- name: Create Claude Code's settings directory  # noqa: risky-file-permissions
   ansible.builtin.file:
     path: "{{ claude_home }}/.claude"
     state: directory
@@ -230,7 +237,7 @@
 # Laid out the way Claude Code writes it itself: two-space indent, keys in
 # their original order, non-ASCII left as is. No mode: an existing file keeps
 # its own, a new one gets the account's umask, as Claude Code would give it.
-- name: Write the merged settings
+- name: Write the merged settings  # noqa: risky-file-permissions
   ansible.builtin.copy:
     dest: "{{ claude_home }}/.claude/settings.json"
     content: "{{ claude_settings_wanted | to_nice_json(indent=2, sort_keys=false, ensure_ascii=false) }}\n"

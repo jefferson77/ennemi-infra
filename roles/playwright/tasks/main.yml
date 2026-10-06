@@ -20,6 +20,7 @@
 - name: Install the Playwright CLI
   ansible.builtin.command: npm install --global playwright@{{ playwright_version }}
   become: true
+  changed_when: true
   when: (playwright_cli_version.stdout | trim) != 'Version ' ~ playwright_version
 
 # The steps below call the CLI. Under --check on a host that never had it there
@@ -44,6 +45,7 @@
   become: true
   environment:
     DEBIAN_FRONTEND: noninteractive
+  changed_when: true
   when:
     - playwright_cli_ready
     - playwright_deps_check.rc == 1
