@@ -27,7 +27,6 @@ ennemi_webapp_entry: "{{ ennemi_webapp_dir }}/.output/server/index.mjs"
 # to at runtime. Created here so ReadWritePaths= in the unit names paths that
 # exist -- systemd refuses to start the service otherwise.
 ennemi_webapp_writable_dirs:
-  - content
   - public
   - raw_assets
 
