@@ -2,7 +2,7 @@
 galaxy_info:
   role_name: certbot
   author: nico
-  description: Let's Encrypt certificates over HTTP-01, renewed unattended.
+  description: Let's Encrypt certificates over HTTP-01 or DNS-01 (OVH), renewed unattended.
   license: proprietary
   min_ansible_version: "2.15"
   platforms:

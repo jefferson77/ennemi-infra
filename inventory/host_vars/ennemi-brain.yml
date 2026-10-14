@@ -9,9 +9,12 @@ ansible_user: ennemi
 # webapp's `make deploy` now puts the build (roles/ennemi_webapp). The
 # certificate it references stays on the host (letsencrypt) and is not managed
 # here. dev.ennemi.net, the staging site, was retired with its service on
-# 2026-09-29: the webapp is now developed on ennemi-dev. ennemi.net also
-# answers on internal.ennemi.net, a LAN-only name for development; the
-# letsencrypt lineage www.ennemi.net was expanded by hand to include it.
+# 2026-09-29: the webapp is now developed on ennemi-dev, and the name now
+# points there (host_vars/ennemi-dev.yml). ennemi.net also answers on
+# internal.ennemi.net, production for the admins: the venue router resolves it
+# to this host's LAN address and public DNS to its tailscale IP, so it is
+# reachable from the LAN and over the tailnet only. The letsencrypt lineage
+# www.ennemi.net was expanded by hand (dns-ovh) to include it.
 nginx_sites:
   - ennemi.net
 

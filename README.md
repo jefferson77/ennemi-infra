@@ -114,6 +114,7 @@ cp .env.example .env      # then fill in the real values
 | `GITHUB_TOKEN` | the `gh` login the `common` role sets up on every host (optional) |
 | `SHOW_TOKEN` | the show app on `ennemi-brain` switching www.ennemi.net (`ennemi_webapp`, optional) — a copy of `ennemi-web`'s |
 | `WEBAPP_SESSION_PASSWORD` | the show app's Control login cookie (`ennemi_webapp`, required, ≥ 32 characters) |
+| `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY` | DNS-01 through OVH's API (`certbot`, required for a `method: dns-ovh` certificate) — see [DNS-01 through OVH](#dns-01-through-ovh-method-dns-ovh) |
 
 `inventory/group_vars/all.yml` is the only place that reads the file, with an
 `ini` lookup in `properties` mode, and the path is derived from the inventory
@@ -291,7 +292,7 @@ roles/nginx/files/conf.d/    -> /etc/nginx/conf.d/
 |----------------|--------------------------------------|---------------------|----------------------|--------------------|
 | `ennemi-brain` | `ennemi.net`                         | —                   | —                    | `stub_status.conf` |
 | `ennemi-vps`   | `vps-placeholder`, `ennemi-web`, `ennemi-web-tailnet` | `ennemi-web-tls` | — | `ennemi-web-api.conf`, `ennemi-web-planb.conf` |
-| `ennemi-dev`   | `ennemi.net-edge`                    | —                   | `ennemi.net-tls`     | —                  |
+| `ennemi-dev`   | `ennemi.net-edge`                    | `dev.ennemi.net`    | `ennemi.net-tls`     | —                  |
 
 `ennemi-brain` also sets `nginx_brotli: true`: `ennemi.net` serves the webapp's pre-compressed
 build with `brotli_static`.
@@ -299,10 +300,11 @@ build with `brotli_static`.
 `ennemi-brain`'s site was copied off the running host byte for byte. `ennemi.net` has
 since been repointed from `/home/ennemi/webapp` to `/var/www/webapp` (its `/_nuxt/`,
 `/images/` and `/audio/` aliases), where the webapp's `make deploy` now puts the build — see
-*The `ennemi_webapp` role*. It also answers on `internal.ennemi.net`, a LAN-only name for
-development: the venue router resolves it to `ennemi-brain`, the edge on `ennemi-dev` does not
-forward it, and the letsencrypt lineage `www.ennemi.net` was expanded by hand (`dns-ovh`) to
-cover it.
+*The `ennemi_webapp` role*. It also answers on `internal.ennemi.net`, production for the
+admins, from the LAN and over the tailnet only: the venue router resolves it to `ennemi-brain`'s
+LAN address and public DNS to its tailscale IP (`100.86.27.113`), and the edge on `ennemi-dev`
+does not forward it. The letsencrypt lineage `www.ennemi.net` was expanded by hand (`dns-ovh`) to
+cover it — DNS-01 is the only way to validate a name Let's Encrypt cannot reach.
 
 ### Sites that need a certificate (`nginx_tls_sites`)
 
@@ -592,6 +594,50 @@ HTTP" when something in front terminated TLS.
 
 A `server` that does not name one of the two hostnames answers `444` and closes.
 
+### `dev.ennemi.net` on `ennemi-dev`
+
+The webapp's development server — `make dev` in the main checkout, port 3000 —
+over HTTPS, for the tailnet only. Unlike the edge above it is not passed to
+`ennemi-brain`: TLS ends on this machine, with a certificate of its own.
+
+Public DNS answers `dev.ennemi.net` with `ennemi-dev`'s tailscale IP
+(`100.70.200.32`), so only a tailnet device reaches it at all. Port 443 already
+belongs to the stream proxy, so the name is not a second `listen 443` but a
+second `server` in `streams/ennemi.net-tls`, listening on the tailscale address:
+next to a wildcard listener on the same port, nginx binds only the wildcard and
+picks the server by the address each connection reached. Connections to the LAN
+address keep the passthrough above; connections to the tailscale address get
+this:
+
+```
+tailnet client -> 100.70.200.32:443 (stream, PROXY protocol added)
+               -> 127.0.0.1:8443 (sites/dev.ennemi.net, TLS ends) -> 127.0.0.1:3000
+```
+
+A separate stream server rather than one more SNI line in the map, because
+`proxy_protocol` and `proxy_timeout` apply per server. The PROXY header carries
+the client's address to the site, which logs it, passes it on as `X-Real-IP`, and
+checks it; `ennemi-brain`'s 443 does not expect one, so it cannot go on the
+passthrough. The timeout is a day rather than ten minutes because Vite's HMR
+socket sits silent until a file is saved, and Vite reloads the page whenever it
+drops.
+
+Both layers allow the tailnet's ranges only (`100.64.0.0/10`,
+`fd7a:115c:a1e0::/48`): the router forwards the internet's 443 here, and a
+development server hands out the app's source. Plain HTTP on port 80 redirects
+to https.
+
+`dev.ennemi.net` is in `nginx_tls_sites`, so it is served only once
+`/etc/letsencrypt/live/dev.ennemi.net/fullchain.pem` exists; until then the
+stream server has nothing to hand to and connections are refused. Let's Encrypt
+cannot reach a tailscale address to validate the name over HTTP, so the
+[`certbot` role](#dns-01-through-ovh-method-dns-ovh) obtains it over DNS-01,
+through OVH's API.
+
+The tailscale addresses are literals in the stream config, like `ennemi-brain`'s.
+If `ennemi-dev` is ever re-registered on the tailnet, update them and the DNS
+record together.
+
 The role deliberately does **not** manage:
 
 - **`nginx.conf`**, with one exception — on `ennemi-brain` and `ennemi-vps` it
@@ -602,8 +648,9 @@ The role deliberately does **not** manage:
   top-level sibling of `http`, so unlike `conf.d` and `sites-enabled` there is
   no packaged include point to drop it into.
 - **certificates and keys**, on `ennemi-brain` and `ennemi-dev`. The site
-  configs there reference `/etc/letsencrypt/live/www.ennemi.net/`, which stays on
-  the host and is renewed as it always was.
+  configs there reference `/etc/letsencrypt/live/www.ennemi.net/` and
+  `/etc/letsencrypt/live/dev.ennemi.net/`, which stay on the host and are
+  renewed there.
   Nothing secret is in this repo, and a host that lacks those files cannot serve
   those sites — which is what `nginx_tls_sites` turns from a failed play into a
   skipped site. On `ennemi-vps` the certificate *is* managed, by the
@@ -620,10 +667,12 @@ Variables: see `roles/nginx/defaults/main.yml`.
 
 ## The `certbot` role
 
-Obtains and renews the Let's Encrypt certificates a host serves, over HTTP-01.
-Only `ennemi-vps` asks for one today:
+Obtains and renews the Let's Encrypt certificates a host serves, over HTTP-01
+or, for a name Let's Encrypt cannot reach, over DNS-01 through OVH's API.
+`ennemi-vps` asks for one of the first kind, `ennemi-dev` for one of the second:
 
 ```yaml
+# inventory/host_vars/ennemi-vps.yml
 certbot_email: nico@data4green.com
 
 certbot_certificates:
@@ -631,6 +680,13 @@ certbot_certificates:
     domains:
       - www.ennemi.net
       - ennemi.net
+
+# inventory/host_vars/ennemi-dev.yml
+certbot_certificates:
+  - name: dev.ennemi.net
+    method: dns-ovh               # webroot when left out
+    domains:
+      - dev.ennemi.net
 ```
 
 `certbot_certificates` is empty by default and the whole role is one guarded
@@ -710,11 +766,46 @@ issuance is skipped while a lineage exists, so delete it first with
 Note the `=` in `--tags=nginx,certbot`. A flag and its value have to be joined,
 or the wrapper reads the value as a target of its own.
 
+### DNS-01 through OVH (`method: dns-ovh`)
+
+A name that resolves to an address Let's Encrypt cannot reach — `dev.ennemi.net`
+points at `ennemi-dev`'s tailscale IP — cannot be validated over HTTP. With
+`method: dns-ovh` certbot proves control of the name another way: it publishes
+the challenge as a `_acme-challenge` TXT record through OVH's API, waits
+`certbot_dns_ovh_propagation_seconds` (120) for it to be visible, and removes it
+once the CA has looked. None of the three conditions above applies: no port 80,
+no DNS record pointing here, no webroot — the HTTP preflight is skipped for it.
+
+The API credentials are the three `OVH_*` keys of `.env`, created at
+<https://eu.api.ovh.com/createToken/> with an **unlimited** validity (renewal is
+unattended, and an expired key is only noticed when the certificate runs out),
+**no IP restriction** (this site's public address is dynamic), and only these
+rights — the single-zone set from the plugin's own documentation:
+
+```
+GET    /domain/zone/
+GET    /domain/zone/ennemi.net/*
+PUT    /domain/zone/ennemi.net/*
+POST   /domain/zone/ennemi.net/*
+DELETE /domain/zone/ennemi.net/*
+```
+
+OVH addresses records by number, so no key can be narrower than the zone: these
+credentials can rewrite any record of `ennemi.net`. The role writes them to
+`/etc/letsencrypt/ovh.ini`, root-only, with `no_log` so neither a run nor its
+`--diff` prints them; on `ennemi-dev`, which is both the controller and the host,
+they never leave the machine. Rotating them is editing `.env` and re-running
+`./deploy ennemi-dev --tags=certbot`.
+
+certbot records the method and the credentials path in the lineage's renewal
+config, so `certbot.timer` renews over DNS-01 on its own, and the same
+`reload-nginx` hook picks the new certificate up.
+
 ### Checking it
 
 ```bash
 sudo certbot certificates        # the lineage, its names and its expiry
-sudo certbot renew --dry-run     # proves the webroot path renews unattended
+sudo certbot renew --dry-run     # proves each lineage renews unattended, by its own method
 systemctl list-timers certbot.timer
 ```
 

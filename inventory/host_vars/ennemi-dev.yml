@@ -10,9 +10,29 @@
 # The two halves work differently and that is deliberate, see the header of
 # each file: port 80 is proxied at the HTTP layer, port 443 is passed through
 # untouched at the TCP layer so ennemi-brain keeps serving its own letsencrypt
-# certificate and this machine needs no key of its own.
+# certificate and this machine needs no key of its own for those names.
 nginx_sites:
   - ennemi.net-edge
 
 nginx_stream_sites:
   - ennemi.net-tls
+
+# dev.ennemi.net: the webapp's development server, for the tailnet only. Public
+# DNS answers the name with this host's tailscale IP; the stream config above
+# hands the connections made to that address to this site, which terminates TLS
+# with a certificate of this host's own -- so the site waits for it. See the
+# header of each file.
+nginx_tls_sites:
+  - name: dev.ennemi.net
+    certificate: /etc/letsencrypt/live/dev.ennemi.net/fullchain.pem
+
+# certbot: that certificate, over DNS-01 through OVH's API -- the name resolves
+# to a tailscale address, which Let's Encrypt cannot reach to validate it over
+# HTTP. The API credentials are the OVH_* keys of .env.
+certbot_email: nico@data4green.com
+
+certbot_certificates:
+  - name: dev.ennemi.net
+    method: dns-ovh
+    domains:
+      - dev.ennemi.net

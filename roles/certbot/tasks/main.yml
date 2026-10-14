@@ -20,8 +20,8 @@
 
 # Everything is inside one block, so a host that names no certificate is left
 # exactly as it is -- certbot is not even installed on it. The nginx role guards
-# its stream half the same way, and this keeps ennemi-brain and ennemi-dev
-# untouched by a role that only the VPS needs.
+# its stream half the same way, and this keeps ennemi-brain, whose certificate
+# predates this repository, untouched by it.
 - name: Obtain and renew the Let's Encrypt certificates
   when: certbot_certificates | length > 0
   tags: [certbot]
@@ -30,6 +30,13 @@
     # any reason to name them, and the file exists for a few seconds at most.
     certbot_preflight_file: ansible-preflight
     certbot_preflight_content: certbot-preflight-ok
+    # The certificates by method (see certbot_certificates in defaults/). Each
+    # method's tasks below run only for the certificates that use it.
+    certbot_dns_ovh_certificates: >-
+      {{ certbot_certificates | selectattr('method', 'defined')
+         | selectattr('method', 'equalto', 'dns-ovh') | list }}
+    certbot_webroot_certificates: >-
+      {{ certbot_certificates | difference(certbot_dns_ovh_certificates) }}
   block:
 
     - name: Check that an account e-mail is set
@@ -43,9 +50,41 @@
           you get that unattended renewal has stopped working. Set it in
           inventory/host_vars/{{ inventory_hostname }}.yml.
 
+    # A misspelt method would otherwise fall through to webroot without a word.
+    - name: Check that every certificate names a known method
+      ansible.builtin.assert:
+        that: >-
+          certbot_certificates | map(attribute='method', default='webroot')
+          | difference(['webroot', 'dns-ovh']) | length == 0
+        quiet: true
+        fail_msg: >-
+          certbot_certificates on {{ inventory_hostname }} names a method other
+          than webroot or dns-ovh:
+          {{ certbot_certificates | map(attribute='method', default='webroot')
+             | difference(['webroot', 'dns-ovh']) | join(', ') }}.
+
+    # Names only, never the values: an assert prints its fail_msg.
+    - name: Check that the OVH API credentials are set
+      ansible.builtin.assert:
+        that:
+          - certbot_dns_ovh_application_key | length > 0
+          - certbot_dns_ovh_application_secret | length > 0
+          - certbot_dns_ovh_consumer_key | length > 0
+        quiet: true
+        fail_msg: >-
+          {{ certbot_dns_ovh_certificates | map(attribute='name') | join(', ') }}
+          on {{ inventory_hostname }} is validated through OVH's API, but its
+          credentials are not all set. They are read from {{ ennemi_env_file }},
+          which is not in git: set OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET
+          and OVH_CONSUMER_KEY in it (.env.example lists the rights to give them).
+      when: certbot_dns_ovh_certificates | length > 0
+
     - name: Install certbot
       ansible.builtin.apt:
-        name: "{{ certbot_packages }}"
+        name: >-
+          {{ certbot_packages
+             + (certbot_dns_ovh_packages
+                if certbot_dns_ovh_certificates | length > 0 else []) }}
         state: present
       become: true
       environment:
@@ -65,6 +104,7 @@
         group: root
         mode: "0755"
       become: true
+      when: certbot_webroot_certificates | length > 0
 
     - name: Create the renewal hook directory
       ansible.builtin.file:
@@ -84,6 +124,27 @@
         mode: "0755"
       become: true
 
+    # Root-only, because these can rewrite the zone, and certbot warns about any
+    # looser mode on every renewal. no_log and diff: false keep the values out
+    # of the run's output, --diff included; the file itself is the only copy on
+    # the host.
+    - name: Write the OVH API credentials
+      ansible.builtin.copy:
+        content: |
+          # Managed by ansible (roles/certbot), from .env. Changes here are overwritten.
+          dns_ovh_endpoint = {{ certbot_dns_ovh_endpoint }}
+          dns_ovh_application_key = {{ certbot_dns_ovh_application_key }}
+          dns_ovh_application_secret = {{ certbot_dns_ovh_application_secret }}
+          dns_ovh_consumer_key = {{ certbot_dns_ovh_consumer_key }}
+        dest: "{{ certbot_dns_ovh_credentials }}"
+        owner: root
+        group: root
+        mode: "0600"
+      become: true
+      no_log: true
+      diff: false
+      when: certbot_dns_ovh_certificates | length > 0
+
     # Let's Encrypt allows five failed validations per hostname per hour, so a
     # misconfiguration that is visible locally should never be discovered by
     # spending one of them -- and the CA's error does not say which of DNS, the
@@ -99,9 +160,12 @@
     # selection does not depend on the address family.
     #
     # Skipped under --check, where the probe file is never actually written and
-    # a 404 would say nothing about the host.
+    # a 404 would say nothing about the host, and for a DNS-01 certificate,
+    # which never touches the webroot.
     - name: Check the challenge webroot before asking the CA
-      when: not ansible_check_mode
+      when:
+        - not ansible_check_mode
+        - certbot_webroot_certificates | length > 0
       block:
 
         - name: Write a probe token into the challenge webroot
@@ -120,7 +184,7 @@
             headers:
               Host: "{{ item }}"
             return_content: true
-          loop: "{{ certbot_certificates | map(attribute='domains') | flatten }}"
+          loop: "{{ certbot_webroot_certificates | map(attribute='domains') | flatten }}"
           register: certbot_preflight
           changed_when: false
           failed_when: false
@@ -200,6 +264,9 @@
     # --cert-name pins the lineage, so /etc/letsencrypt/live/<name>/ stays where
     # the nginx config expects it even if the domain list changes later.
     #
+    # The method's own flags come from the entry's `method`. A dns-ovh issuance
+    # takes a couple of minutes, nearly all of it certbot_dns_ovh_propagation_seconds.
+    #
     # "Reload nginx" is the nginx role's handler, not one of this role's: every
     # role applied in the same play shares a handler namespace, and site.yml
     # applies nginx immediately before this one.
@@ -208,7 +275,12 @@
         cmd: >-
           certbot certonly --non-interactive --agree-tos
           --email {{ certbot_email | quote }}
+          {% if item.method | default('webroot') == 'dns-ovh' %}
+          --dns-ovh --dns-ovh-credentials {{ certbot_dns_ovh_credentials | quote }}
+          --dns-ovh-propagation-seconds {{ certbot_dns_ovh_propagation_seconds | int }}
+          {% else %}
           --webroot --webroot-path {{ certbot_webroot | quote }}
+          {% endif %}
           --cert-name {{ item.name | quote }}
           {% for domain in item.domains %}-d {{ domain | quote }} {% endfor %}
           {{ '--staging' if certbot_staging | bool else '' }}

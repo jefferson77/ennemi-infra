@@ -43,3 +43,23 @@ ennemi_web_show_token: >-
   {{ lookup('ansible.builtin.ini', 'SHOW_TOKEN',
             type='properties', file=ennemi_env_file, errors='ignore')
      | default('', true) }}
+
+# OVH API credentials, for the certificates roles/certbot validates over DNS-01
+# (`method: dns-ovh`): an application key, its secret, and a consumer key whose
+# rights are limited to the ennemi.net zone. Required on a host that asks for
+# such a certificate -- the role refuses to run without all three -- and never
+# read anywhere else.
+certbot_dns_ovh_application_key: >-
+  {{ lookup('ansible.builtin.ini', 'OVH_APPLICATION_KEY',
+            type='properties', file=ennemi_env_file, errors='ignore')
+     | default('', true) }}
+
+certbot_dns_ovh_application_secret: >-
+  {{ lookup('ansible.builtin.ini', 'OVH_APPLICATION_SECRET',
+            type='properties', file=ennemi_env_file, errors='ignore')
+     | default('', true) }}
+
+certbot_dns_ovh_consumer_key: >-
+  {{ lookup('ansible.builtin.ini', 'OVH_CONSUMER_KEY',
+            type='properties', file=ennemi_env_file, errors='ignore')
+     | default('', true) }}

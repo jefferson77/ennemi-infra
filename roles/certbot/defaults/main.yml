@@ -14,12 +14,27 @@ certbot_packages:
 #       domains:                      # /etc/letsencrypt/live/<name>/
 #         - www.ennemi.net
 #         - ennemi.net
+#     - name: dev.ennemi.net
+#       method: dns-ovh               # webroot when left out
+#       domains:
+#         - dev.ennemi.net
 #
-# Every name in `domains` goes into the same certificate, and every one of them
-# must resolve to this host and answer on port 80 before the issuance can work.
-# `name` is passed as --cert-name, so it stays stable when the domain list
-# changes -- without it certbot renames the lineage after the first domain and
-# the paths in the nginx config stop matching.
+# Every name in `domains` goes into the same certificate. `name` is passed as
+# --cert-name, so it stays stable when the domain list changes -- without it
+# certbot renames the lineage after the first domain and the paths in the nginx
+# config stop matching.
+#
+# `method` is how Let's Encrypt checks that the names are ours:
+#
+#   webroot  HTTP-01: it fetches a token from each name on port 80, so every
+#            name must resolve to this host and answer there.
+#   dns-ovh  DNS-01: certbot publishes a TXT record through OVH's API instead,
+#            for a name the CA cannot reach -- one that resolves to a tailscale
+#            address, say. Needs the certbot_dns_ovh_* credentials, read from
+#            .env by inventory/group_vars/all.yml.
+#
+# certbot records the method in the lineage's renewal config, so the renewal
+# timer goes on using whichever one obtained the certificate.
 certbot_certificates: []
 
 # Account e-mail. Let's Encrypt sends expiry warnings here, which is the only
@@ -43,6 +58,25 @@ certbot_email: ""
 # kind to debug. /srv/acme is not under any document root and never should be,
 # so the two deploys cannot collide however VPS_PATH is overridden.
 certbot_webroot: /srv/acme
+
+# DNS-01 through OVH, for a certificate whose entry says `method: dns-ovh`. A
+# host with none installs, writes and reads nothing of this.
+certbot_dns_ovh_packages:
+  - python3-certbot-dns-ovh
+
+# Where the API credentials are written on the host, root-only (0600): whoever
+# can read them can rewrite the zone. certbot remembers this path in the renewal
+# config, so it must not move once a certificate depends on it.
+certbot_dns_ovh_credentials: /etc/letsencrypt/ovh.ini
+
+# The API the credentials were created on. ennemi.net is served by OVH Europe
+# (ns16/dns16.ovh.net).
+certbot_dns_ovh_endpoint: ovh-eu
+
+# How long certbot waits after publishing the TXT record before asking the CA
+# to look it up. The plugin's own default; raise it if a validation fails on a
+# record that is not there yet.
+certbot_dns_ovh_propagation_seconds: 120
 
 # Use Let's Encrypt's staging CA. Its certificates are signed by an untrusted
 # root, so browsers reject them, but the rate limits are far looser than the

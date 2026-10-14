@@ -1,4 +1,6 @@
 # TLS for ennemi.net on ennemi-dev, passed straight through to ennemi-brain.
+# The second server, at the end, is dev.ennemi.net: a different arrangement for
+# a different name, explained there.
 #
 # This machine holds no certificate for ennemi.net and should not: the
 # letsencrypt material lives on ennemi-brain and is renewed there. So port 443
@@ -51,4 +53,61 @@ server {
     # them from an idle HTTP keepalive. Ten minutes of silence before the
     # connection is reclaimed.
     proxy_timeout 10m;
+}
+
+# dev.ennemi.net: the webapp's development server on this machine, for the
+# tailnet only. Unlike the names above it is not passed to ennemi-brain but
+# terminated here, by sites/dev.ennemi.net, with this host's own certificate.
+#
+# Public DNS answers the name with this host's tailscale IP, so its connections
+# arrive on that address rather than on the LAN one, and the address is what
+# selects this server: with a wildcard listener on the same port, nginx binds
+# the wildcard only and picks the server by the address a connection reached.
+# Nothing binds the tailscale address itself, so nginx starts whether or not
+# tailscaled is up yet.
+#
+# A server of its own rather than one more line in the map above, because two
+# of its settings apply to a whole server, not to one upstream:
+#
+#   proxy_protocol  hands the client's real address to sites/dev.ennemi.net,
+#                   which checks and logs it. ennemi-brain's 443 does not
+#                   expect it, so it cannot go on the server above.
+#   proxy_timeout   a development page holds Vite's HMR socket open and silent
+#                   until a file is saved, and Vite reloads the page when that
+#                   socket drops: ten minutes would reload an idle page six
+#                   times an hour.
+#
+# The cost: a tailnet client reaching this address under another name is no
+# longer passed to ennemi-brain. Nothing sends one here -- www.ennemi.net
+# resolves to the VPS, or on the LAN to brain itself.
+#
+# The addresses are this host's (`tailscale ip`), literals like brain's above.
+# If they ever change, this server stops matching and the name falls through to
+# the map above, which drops it: the DNS record has to follow.
+upstream ennemi_dev_tls {
+    server 127.0.0.1:8443;
+}
+
+server {
+    listen 100.70.200.32:443;
+    listen [fd7a:115c:a1e0::b62e:c821]:443;
+
+    # The tailnet's ranges, as in sites/ennemi-web-tailnet. A LAN host can route
+    # a packet to this address through this machine, but it cannot complete a
+    # connection from one of these: the replies go out through tailscale0.
+    # sites/dev.ennemi.net checks again behind it.
+    allow 100.64.0.0/10;
+    allow fd7a:115c:a1e0::/48;
+    deny all;
+
+    # Read for the log's sni field only: every connection goes the same way.
+    ssl_preread on;
+    proxy_pass ennemi_dev_tls;
+    proxy_protocol on;
+
+    access_log /var/log/nginx/dev.ennemi.net-tls.access.log ennemi_tls;
+    error_log  /var/log/nginx/dev.ennemi.net-tls.error.log;
+
+    proxy_connect_timeout 5s;
+    proxy_timeout 1d;
 }

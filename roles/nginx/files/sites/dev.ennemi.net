@@ -1,0 +1,95 @@
+# dev.ennemi.net on ennemi-dev: the webapp's development server, over HTTPS, for
+# the tailnet only. `make dev` in the main checkout serves it on port 3000; a
+# worktree's dev server (3200 + its slot) is not behind this name.
+#
+# Public DNS answers dev.ennemi.net with this host's tailscale IP, so only a
+# device on the tailnet can reach it at all. Port 443 here belongs to the stream
+# proxy, not to this file: streams/ennemi.net-tls picks out the connections made
+# to the tailscale address and passes them, still encrypted, to the loopback
+# listener below, with a PROXY protocol header carrying the client's address.
+# TLS ends here.
+#
+# Listed in nginx_tls_sites, not nginx_sites: the role deploys this file only
+# once the certificate below is on the host. Until then the stream proxy has
+# nothing to hand those connections to, and they are refused. The name resolves
+# to an address Let's Encrypt cannot reach, so that certificate can only be
+# validated over DNS (DNS-01), never through a webroot.
+
+# A websocket upgrade -- the app's own socket at /api/websocket, Vite's HMR
+# socket under /_nuxt/ -- is passed on as one, and every other request as an
+# ordinary request.
+map $http_upgrade $ennemi_dev_connection {
+    default   upgrade;
+    ""        close;
+}
+
+server {
+    listen 127.0.0.1:8443 ssl proxy_protocol;
+    http2 on;
+    server_name dev.ennemi.net;
+
+    access_log /var/log/nginx/dev.ennemi.net.access.log;
+    error_log  /var/log/nginx/dev.ennemi.net.error.log;
+
+    # The client's address from the PROXY header rather than the stream proxy's
+    # 127.0.0.1: in the log, in X-Real-IP and X-Forwarded-For, and in the check
+    # below.
+    set_real_ip_from 127.0.0.1;
+    real_ip_header proxy_protocol;
+
+    # The tailnet only. streams/ennemi.net-tls already refuses anything else;
+    # this is the backstop should that routing ever change -- the router forwards
+    # the internet's 443 to this machine, and a development server hands out the
+    # app's source.
+    allow 100.64.0.0/10;
+    allow fd7a:115c:a1e0::/48;
+    deny all;
+
+    ssl_certificate /etc/letsencrypt/live/dev.ennemi.net/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/dev.ennemi.net/privkey.pem;
+
+    # SSL Configuration - Mozilla Intermediate Profile, as on the other
+    # ennemi.net sites. No OCSP stapling, for the reason given in
+    # sites/ennemi-web-tls, and a session cache under a name of its own.
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
+    ssl_prefer_server_ciphers off;
+
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:dev_ennemi_net:10m;
+    ssl_session_tickets off;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $ennemi_dev_connection;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        # Vite compiles a module when it is asked for: pass each response on as
+        # it comes rather than holding it back.
+        proxy_buffering off;
+
+        # A day, as on the stream proxy in front, for the same HMR socket.
+        proxy_read_timeout 1d;
+        proxy_send_timeout 1d;
+    }
+}
+
+# Plain HTTP, for a browser that tries it first. Port 80 is the edge's
+# (sites/ennemi.net-edge), whose default_server closes on any name it does not
+# know. Not limited to the tailnet: a server-level `return` runs before any
+# allow/deny would, and a redirect to a name only the tailnet can reach gives
+# nothing away.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name dev.ennemi.net;
+
+    return 301 https://dev.ennemi.net$request_uri;
+}

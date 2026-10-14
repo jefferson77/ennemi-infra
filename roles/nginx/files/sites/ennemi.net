@@ -24,8 +24,9 @@ map $http_x_forwarded_proto $ennemi_client_proto {
 
 # Where the plain-HTTP upgrade sends a client: the name it asked for when that
 # is the development vhost, www otherwise (which also canonicalises the apex).
-# internal.ennemi.net is LAN-only: the venue router resolves it to this host,
-# and the edge on ennemi-dev does not forward it (streams/ennemi.net-tls).
+# internal.ennemi.net is for the LAN and the tailnet only: the venue router
+# resolves it to this host's LAN address, public DNS to its tailscale IP, and
+# the edge on ennemi-dev does not forward it (streams/ennemi.net-tls).
 map $host $ennemi_https_host {
     internal.ennemi.net   internal.ennemi.net;
     default               www.ennemi.net;
@@ -47,8 +48,8 @@ server {
         return 301 https://$ennemi_https_host$request_uri;
     }
 
-    # SSL Certificates - one lineage for all three names (it renews by DNS-01,
-    # so internal.ennemi.net needs no public record)
+    # SSL Certificates - one lineage for all three names. It renews by DNS-01:
+    # internal.ennemi.net resolves to addresses Let's Encrypt cannot reach.
     ssl_certificate /etc/letsencrypt/live/www.ennemi.net/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/www.ennemi.net/privkey.pem;
     ssl_trusted_certificate /etc/letsencrypt/live/www.ennemi.net/chain.pem;
