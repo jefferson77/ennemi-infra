@@ -59,6 +59,16 @@ server {
     ssl_session_cache shared:dev_ennemi_net:10m;
     ssl_session_tickets off;
 
+    # Vite serves the app unbundled, one module per request: opening / and then
+    # /control is some 1100 requests on one HTTP/2 connection, and every save
+    # adds more. By default nginx ends a connection with a GOAWAY after 1000
+    # requests or an hour (keepalive_requests, keepalive_time), and a request
+    # the browser had just put on it is then failed rather than retried: the
+    # page's import fails with it, and Nuxt shows its 500 page. Both limits
+    # free the memory of busy public servers; this one serves the tailnet only.
+    keepalive_requests 100000;
+    keepalive_time 1d;
+
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;

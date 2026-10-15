@@ -10,3 +10,14 @@
     state: restarted
   become: true
   when: ennemi_web_api_entry_stat.stat.exists | default(false)
+
+# After the nodejs role installs another Node.js, the running API still holds
+# the old binary. try-restart restarts the unit only if it is running, and it
+# needs no fact from this role's tasks -- so it also works under
+# `--tags=nodejs`, where the stat above never runs. systemd_service has no
+# try-restart state, hence the command.
+- name: Restart ennemi-web-api on the new Node.js
+  ansible.builtin.command: systemctl try-restart {{ ennemi_web_api_service }}  # noqa: command-instead-of-module
+  become: true
+  changed_when: true
+  listen: Node.js changed

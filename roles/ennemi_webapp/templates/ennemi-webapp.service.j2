@@ -24,6 +24,12 @@ Environment=PORT={{ ennemi_webapp_port }}
 {% if ennemi_webapp_network_ip %}
 Environment=NUXT_PUBLIC_NETWORK_IP={{ ennemi_webapp_network_ip }}
 {% endif %}
+{% if ennemi_webapp_plan_b_relay_address_list %}
+Environment=NUXT_PLAN_B_RELAY_ADDRESS_LIST={{ ennemi_webapp_plan_b_relay_address_list }}
+{% endif %}
+{% if ennemi_webapp_audience_url %}
+Environment=NUXT_PUBLIC_AUDIENCE_URL={{ ennemi_webapp_audience_url }}
+{% endif %}
 Restart=always
 RestartSec=10
 StandardOutput=journal

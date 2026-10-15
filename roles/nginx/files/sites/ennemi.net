@@ -48,6 +48,13 @@ server {
         return 301 https://$ennemi_https_host$request_uri;
     }
 
+    # And the apex over HTTPS: to a browser it is another origin, with its own
+    # cookies and storage, so a phone there would hold an audience identity that
+    # is not the one it has on www (webapp's specs/audience-identity.md).
+    if ($host = "ennemi.net") {
+        return 301 https://www.ennemi.net$request_uri;
+    }
+
     # SSL Certificates - one lineage for all three names. It renews by DNS-01:
     # internal.ennemi.net resolves to addresses Let's Encrypt cannot reach.
     ssl_certificate /etc/letsencrypt/live/www.ennemi.net/fullchain.pem;

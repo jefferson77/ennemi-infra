@@ -79,8 +79,8 @@
 # "dev" group, rather than a `when:` on the role, so the role never has to know
 # which host it is running on and `./deploy dev` reads the same as the rest.
 #
-# Node comes before playwright, as in the plays above: the CLI is an npm
-# package. nvm still provides the node of an interactive shell here; this one
+# Node comes before pnpm and playwright, as in the plays above: both are npm
+# packages. nvm still provides the node of an interactive shell here; this one
 # is what ansible and root can find.
 - name: Apply the development toolchain
   hosts: dev
@@ -90,6 +90,8 @@
       tags: [dev]
     - role: nodejs
       tags: [nodejs]
+    - role: pnpm
+      tags: [pnpm]
     - role: playwright
       tags: [playwright]
     - role: claude

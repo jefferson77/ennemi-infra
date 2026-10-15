@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: pnpm
+  author: nico
+  description: pnpm, installed globally, for the webapp's dependencies.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

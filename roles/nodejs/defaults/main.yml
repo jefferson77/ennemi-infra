@@ -9,7 +9,13 @@
 #
 # Keep this on the major in the .nvmrc of both projects that run on it:
 # ennemi-web's server/ (ennemi-vps) and the webapp's build (ennemi-brain).
-nodejs_major: 24
+# Changing it moves an installed Node to the new major (lowering it is the
+# rollback) and restarts the services that run on it; see tasks/main.yml.
+nodejs_major: 26
+
+# The binary the package installs, which the services' units run. Checked by
+# path: on ennemi-dev an nvm `node` may come first on the PATH.
+nodejs_bin: /usr/bin/node
 
 nodejs_apt_key_url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
 nodejs_apt_keyring: /etc/apt/keyrings/nodesource.asc

@@ -73,3 +73,14 @@ ennemi_webapp_database_unit: postgresql@18-main.service
 # EnvironmentFile, and only when ennemi_web_show_token (SHOW_TOKEN in .env) is
 # set: without it the app leaves the site alone.
 ennemi_webapp_website_live_url: http://ennemi-vps.tail21508.ts.net/api/live
+
+# The address every Plan B phone reaches the app from: ennemi-vps forwards them
+# over the tailnet, so brain's nginx sees the VPS's tailscale IP. The app tells
+# those connections apart by it (NUXT_PLAN_B_RELAY_ADDRESS_LIST, comma-separated;
+# webapp's server/utils/networkPath.ts). Empty: nothing is classified Plan B.
+ennemi_webapp_plan_b_relay_address_list: "{{ hostvars['ennemi-vps']['ansible_host'] | default('') }}"
+
+# What the onboarding QR codes hand the audience (NUXT_PUBLIC_AUDIENCE_URL): the
+# one origin a phone's identity lives on, whichever of the host's names a stage
+# display was opened on. Empty: the page's own origin.
+ennemi_webapp_audience_url: https://www.ennemi.net/

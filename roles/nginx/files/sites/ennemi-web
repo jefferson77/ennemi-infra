@@ -43,10 +43,13 @@ server {
         access_log off;
     }
 
-    # $host, not a literal, so the apex stays on the apex rather than being
-    # bounced to www. Change it to https://www.ennemi.net$request_uri to
-    # canonicalise instead, the way ennemi-brain's sites/ennemi.net does.
+    # Canonicalised to www, the way ennemi-brain's sites/ennemi.net does. The
+    # apex is another origin to a browser, with its own cookies and storage: a
+    # phone that reached the show app there, through Plan B, would hold an
+    # audience identity that is not the one it has on www (webapp's
+    # specs/audience-identity.md). Here and not as a server-level `if`, which
+    # would run before the ACME location above and break renewal.
     location / {
-        return 301 https://$host$request_uri;
+        return 301 https://www.ennemi.net$request_uri;
     }
 }

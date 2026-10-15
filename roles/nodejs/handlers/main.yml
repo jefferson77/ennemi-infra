@@ -1,0 +1,10 @@
+---
+# Installing another Node.js notifies "Node.js changed". The roles of the
+# services that run on Node listen for it and restart them, so they leave the
+# old binary behind (see ennemi_webapp and ennemi_web_api). A notification that
+# nothing listens to fails the play, and the dev play runs no such service:
+# this listener is always there.
+- name: Report the Node.js change
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: Node.js changed; services that run on it restart."
+  listen: Node.js changed

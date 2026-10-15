@@ -1,0 +1,14 @@
+---
+# pnpm, the webapp's package manager (`make install`, the worktree hook).
+#
+# Node no longer ships corepack (since 25), so nothing on the host provides
+# pnpm on its own: this role installs it globally with the NodeSource npm from
+# roles/nodejs. In a project, pnpm then switches itself to the exact version
+# that project's package.json names in `packageManager`, downloading it if it
+# differs. Keep this on the webapp's `packageManager`, so it never has to.
+pnpm_version: "12.11.2"
+
+# The global install goes under the NodeSource prefix (roles/nodejs), so it is
+# on root's PATH as well as the account's, whatever nvm puts in front of it in
+# an interactive shell. It runs on whichever `node` comes first on the PATH.
+pnpm_bin: /usr/bin/pnpm

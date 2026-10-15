@@ -33,6 +33,7 @@ roles/certbot/           # Let's Encrypt certificates, obtained and renewed
 roles/dragonfly/         # Dragonfly (redis replacement), as a systemd service
 roles/postgres/          # PostgreSQL 18, from the Ubuntu archive
 roles/nodejs/            # Node.js from NodeSource, one major line
+roles/pnpm/              # pnpm, the webapp's package manager (ennemi-dev only)
 roles/ennemi_web_api/    # ennemi-web's live-state API, as a systemd service
 roles/ennemi_webapp/     # the show webapp on ennemi-brain, as a systemd service
 roles/dev/               # development-machine toolchain (ennemi-dev only)
@@ -1037,15 +1038,29 @@ Variables: see `roles/postgres/defaults/main.yml`.
 Node.js on the hosts of the `web_api` and `webapp` groups (the VPS and `ennemi-brain`), and
 on `ennemi-dev` for the `playwright` role, from
 [NodeSource](https://github.com/nodesource/distributions)'s apt repository —
-one repository per major line, so the host gets `nodejs_major` (24, the major in
+one repository per major line, so the host gets `nodejs_major` (26, the major in
 both `ennemi-web`'s and the webapp's `.nvmrc`) and every security release of it through apt, which
 `common`'s dist-upgrade then keeps current. Ubuntu's own `nodejs` follows the
 distribution's freeze instead.
 
 An apt pin (`/etc/apt/preferences.d/nodesource`, priority 600) makes apt prefer
-NodeSource's package even where the archive carries a higher-numbered one. The
-role fails, with the command to fix it, on a host whose installed `node` is from
-another major: `state: present` would not replace it on its own.
+NodeSource's package even where the archive carries a higher-numbered one.
+
+**Changing `nodejs_major` moves the host to it.** The role installs `nodejs=<major>.*`,
+so a host on another major is upgraded (or, with `allow_downgrade`, downgraded:
+lowering the number is the rollback). It then notifies `Node.js changed`, which
+the `ennemi_webapp` and `ennemi_web_api` roles answer with a `systemctl
+try-restart` of their service, so nothing keeps running on the old binary. Apply
+it with the service's role, so its health check runs after the restart:
+
+```bash
+./deploy ennemi-vps --tags=nodejs,ennemi_web_api --check --diff
+./deploy ennemi-brain --tags=nodejs,ennemi_webapp --check --diff
+```
+
+Under `--check` the repository is not actually switched, so the dry run says it
+would switch instead of simulating the install. The role still fails, as a
+safety net, on a host whose `node` ends up on another major.
 
 ```bash
 ./deploy ennemi-vps nodejs
@@ -1203,28 +1218,46 @@ again.
 
 Variables: see `roles/dev/defaults/main.yml`.
 
+## The `pnpm` role
+
+The webapp's package manager, on `ennemi-dev`. Node stopped shipping corepack
+in 25, so this role installs it globally with the NodeSource npm: `/usr/bin/pnpm`,
+on root's PATH as well as the account's, whatever nvm puts in front of it in an
+interactive shell. It runs in the `dev` play, after `nodejs`.
+
+**Keep `pnpm_version` on the webapp's `packageManager`.** In a project pnpm
+switches itself to the exact version the project names there, downloading it
+when the global one differs.
+
+```bash
+./deploy ennemi-dev --tags=pnpm
+pnpm --version
+```
+
+Variables: see `roles/pnpm/defaults/main.yml`.
+
 ## The `playwright` role
 
 What the webapp's E2E suite (`make e2e`, `make e2e-local`) needs on `ennemi-dev`
-beyond its own `node_modules`. It runs in the same `dev` play, after `nodejs`.
+beyond its own `node_modules`. It runs in the same `dev` play, after `nodejs` and `pnpm`.
 
 | | |
 |---|---|
-| CLI | `playwright@1.62.1`, installed globally: `/usr/bin/playwright` |
+| CLI | `playwright@1.64.0`, installed globally: `/usr/bin/playwright` |
 | System libraries | whatever `playwright install-deps chromium` lists for this Ubuntu release |
 | Browsers | `chromium` (+ its headless shell), in `~ennemi/.cache/ms-playwright` |
 
-The suite itself still runs the project's own copy through `npx playwright test`;
+The suite itself still runs the project's own copy through `pnpm exec playwright test`;
 the global CLI is there to install the rest and for use outside a project.
 
-**Keep `playwright_version` on the webapp's `package-lock.json`.** Each Playwright
+**Keep `playwright_version` on the webapp's `pnpm-lock.yaml`.** Each Playwright
 release looks for one exact browser build in the cache. After an upgrade there,
 bump it here and redeploy, or the suite stops with "Executable doesn't exist".
 
 The libraries step is skipped when `install-deps --dry-run` finds nothing
 missing, so a rerun reports `ok` instead of running `apt-get update` every time.
 
-On this host, nvm still provides `node` and `npx` to an interactive shell. The
+On this host, nvm still provides `node` to an interactive shell. The
 NodeSource `node` from the `nodejs` role, same major, is the one ansible and root
 call.
 

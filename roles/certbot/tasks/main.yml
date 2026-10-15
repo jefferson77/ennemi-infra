@@ -303,13 +303,17 @@
     #
     # Not a handler: it has to run here, with its tags applied, rather than at
     # the end of the play after "Reload nginx" has already fired.
+    #
+    # Under --tags nginx alone, "Obtain the certificates" is skipped and
+    # registers nothing: no certificate arrived, and the nginx role has just
+    # run tls_sites itself.
     - name: Enable the nginx sites that were waiting for a certificate  # noqa: no-handler
       ansible.builtin.include_role:
         name: nginx
         tasks_from: tls_sites
         apply:
           tags: [certbot, nginx]
-      when: certbot_obtained.changed
+      when: certbot_obtained.changed | default(false)
       tags: [certbot, nginx]
 
     # Shipped by the package -- `certbot -q renew` twice a day, with up to twelve

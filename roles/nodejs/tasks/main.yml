@@ -47,6 +47,7 @@
     enabled: true
     state: present
   become: true
+  register: nodejs_repository
 
 - name: Prefer NodeSource's nodejs over Ubuntu's
   ansible.builtin.copy:
@@ -61,25 +62,42 @@
     mode: "0644"
   become: true
 
-- name: Install Node.js
+# The version spec, not `state: latest`, is what moves a host to another major:
+# `nodejs` alone with `state: present` keeps whatever major is installed, and
+# `latest` would also take every patch release here, restarting the services
+# for it. allow_downgrade makes lowering nodejs_major the rollback.
+#
+# Under --check the repository is not actually switched, so apt cannot see the
+# new major yet and would fail to find it: say what would happen instead.
+- name: Install Node.js, major {{ nodejs_major }}
   ansible.builtin.apt:
-    name: nodejs
+    name: "nodejs={{ nodejs_major }}.*"
     state: present
+    allow_downgrade: true
     update_cache: true
   become: true
   environment:
     DEBIAN_FRONTEND: noninteractive
+  when: not (ansible_check_mode and nodejs_repository is changed)
+  notify: Node.js changed
+
+- name: Say what the dry run cannot simulate
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} would switch to node_{{ nodejs_major }}.x and
+      restart the services that run on Node.
+  when: ansible_check_mode and nodejs_repository is changed
 
 - name: Read the installed version
-  ansible.builtin.command: node --version
+  ansible.builtin.command: "{{ nodejs_bin }} --version"
   register: nodejs_version_output
   changed_when: false
   check_mode: false   # read-only, must run so --check knows what it compares to
   failed_when: false
 
-# A host that already had Ubuntu's nodejs from another major would keep it:
-# `state: present` does not upgrade. Say so rather than leave a service running
-# on the wrong major.
+# The version spec above should have moved any other major, Ubuntu's included.
+# Should it not have, say so rather than leave a service running on the wrong
+# major.
 - name: Check that the major version is the one asked for
   ansible.builtin.assert:
     that: nodejs_version_output.stdout is match('v' ~ nodejs_major ~ '\.')

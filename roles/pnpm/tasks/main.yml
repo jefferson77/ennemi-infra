@@ -1,0 +1,17 @@
+---
+- name: Read the installed pnpm
+  ansible.builtin.command: "{{ pnpm_bin }} --version"
+  register: pnpm_installed_version
+  changed_when: false
+  failed_when: false
+  check_mode: false   # read-only, must run so --check knows what it compares to
+
+- name: Install pnpm
+  ansible.builtin.command: npm install --global pnpm@{{ pnpm_version }}
+  become: true
+  changed_when: true
+  when: (pnpm_installed_version.stdout | trim) != pnpm_version
+
+- name: Report the installed pnpm
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: pnpm {{ pnpm_version }}."

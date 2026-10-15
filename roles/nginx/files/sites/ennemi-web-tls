@@ -58,6 +58,14 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
 
+    # The apex goes to www: to a browser it is another origin, with its own
+    # cookies and storage, and a Plan B phone forwarded to the show app under it
+    # would hold another audience identity (webapp's specs/audience-identity.md).
+    # `return` inside `if` at server level is one of the supported uses of `if`.
+    if ($host = "ennemi.net") {
+        return 301 https://www.ennemi.net$request_uri;
+    }
+
     # ---------------------------------------------------------- compression
     #
     # The site is built with its .gz and .br variants already on disk beside
