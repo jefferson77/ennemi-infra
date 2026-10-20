@@ -216,9 +216,14 @@ server {
 
         # WebSocket-specific settings
         proxy_buffering off;
-        proxy_connect_timeout 7d;
-        proxy_send_timeout 7d;
-        proxy_read_timeout 7d;
+        # The app answers on localhost or not at all.
+        proxy_connect_timeout 5s;
+        # The app pings every socket every 25 s and cuts one that stops answering
+        # (webapp server/utils/peerHeartbeat.ts), so a live socket is never quiet
+        # this long: a minute of silence from the app means it is gone. Plan B
+        # sockets come through here too, relayed by ennemi-vps.
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
 
         # CRITICAL: Disable compression for WebSocket
         gzip off;

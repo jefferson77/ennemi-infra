@@ -273,7 +273,8 @@ server {
         # Fail fast when the tailnet is down: a 502, and the cookie is kept, so
         # the phone's socket reconnects by itself once brain is back.
         proxy_connect_timeout 5s;
-        # The socket pings every 20 s; an hour is only a backstop.
+        # The phone pings every 20 s and the app every 25 s, and brain's nginx
+        # cuts a socket after 60 s of silence; an hour is only a backstop.
         proxy_read_timeout 1h;
         proxy_send_timeout 1h;
 
