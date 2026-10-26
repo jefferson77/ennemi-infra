@@ -135,7 +135,8 @@ server {
     # ------------------------------------------------------------- the site
     #
     # The build that is already on this host: the landing page at /, the
-    # standalone /morceau trailer and the /admin page. Static files, plus one
+    # standalone /morceau trailer, the /admin page and the /doomscroll pages
+    # (the team's writing and test pages for the Doomscroll sequence). Static files, plus one
     # small API under /api/ (ennemi-web-api, roles/ennemi_web_api) that stores
     # whether a show is running. The show app itself stays on ennemi-brain
     # inside the venue network, reachable through this site only by Plan B (at
@@ -166,14 +167,22 @@ server {
         return 200 "ok\n";
     }
 
-    # morceau/index.html and admin/index.html only resolve with the trailing
-    # slash.
+    # morceau/index.html, admin/index.html and the doomscroll pages only
+    # resolve with the trailing slash.
     location = /morceau {
         return 308 /morceau/$is_args$args;
     }
 
     location = /admin {
         return 308 /admin/$is_args$args;
+    }
+
+    location = /doomscroll {
+        return 308 /doomscroll/$is_args$args;
+    }
+
+    location = /doomscroll/edition {
+        return 308 /doomscroll/edition/$is_args$args;
     }
 
     # The live-state API, on the loopback only (roles/ennemi_web_api). It sets
@@ -184,6 +193,29 @@ server {
         limit_req zone=ennemi_web_api burst=5 nodelay;
         limit_req_status 429;
         client_max_body_size 1k;
+
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+    }
+
+    # Saving a Doomscroll text version (the /doomscroll/edition/ page): the
+    # whole text in one body, a few kilobytes, which the 1k cap above would
+    # answer 413. Same API, same rate limit, same headers; only the body size
+    # differs, and only for this one route. The API refuses more than 256 KiB
+    # on its own as well.
+    location = /api/admin/doomscroll/version {
+        limit_req zone=ennemi_web_api burst=5 nodelay;
+        limit_req_status 429;
+        client_max_body_size 256k;
 
         proxy_pass http://127.0.0.1:8787;
         proxy_http_version 1.1;
