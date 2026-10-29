@@ -1,0 +1,376 @@
+---
+# T3 Code in five parts: the t3 CLI, lingering for the account, the service's
+# environment, T3 Connect kept off, and the service itself. Like the claude
+# role, everything but lingering runs as the account, stays in its home, and
+# calls t3 by its full path. The service is a systemd user unit, so every command that reaches it
+# needs the account's runtime directory, which sudo does not pass on.
+
+- name: Look up the account
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ t3_user }}"
+
+- name: Locate T3 Code for the account
+  ansible.builtin.set_fact:
+    t3_home: "{{ t3_passwd[4] }}"
+    t3_shell: "{{ t3_passwd[5] }}"
+    t3_bin: "{{ t3_passwd[4] }}/.local/bin/t3"
+    t3_unit_path: "{{ t3_passwd[4] }}/.config/systemd/user/t3code.service"
+    t3_user_env:
+      XDG_RUNTIME_DIR: /run/user/{{ t3_passwd[1] }}
+      DBUS_SESSION_BUS_ADDRESS: unix:path=/run/user/{{ t3_passwd[1] }}/bus
+  vars:
+    t3_passwd: "{{ ansible_facts['getent_passwd'][t3_user] }}"
+
+# Read before anything can create it: the restart handler only acts on a
+# service that was already there when the run started.
+- name: Look for an installed T3 Code service
+  ansible.builtin.stat:
+    path: "{{ t3_unit_path }}"
+  register: t3_unit_before
+
+# --- t3 -------------------------------------------------------------------------
+
+# Prints the bare version, e.g. "0.1.0". Fails, and is let fail, when there is
+# no t3 yet: that is the "install" branch below.
+- name: Read the installed T3 Code
+  ansible.builtin.command: "{{ t3_bin }} --version"
+  become: true
+  become_user: "{{ t3_user }}"
+  register: t3_version_before
+  changed_when: false
+  failed_when: false
+  check_mode: false   # read-only, must run so --check knows what it compares to
+
+# The redirect is read rather than the API, as for Worktrunk: api.github.com
+# refuses anonymous callers after a handful of requests.
+- name: Ask GitHub for the newest stable T3 Code
+  ansible.builtin.uri:
+    url: "{{ t3_releases_url }}/latest"
+    follow_redirects: none
+    status_code: [301, 302]
+  register: t3_release
+  check_mode: false   # a plain GET, must run so --check knows what it compares to
+
+- name: Settle the installed and the target T3 Code versions
+  ansible.builtin.set_fact:
+    t3_installed: >-
+      {{ (t3_version_before.stdout | regex_search('[0-9]+\.[0-9]+\.[0-9]+\S*') | default('', true))
+         if t3_version_before.rc | default(1) == 0 else '' }}
+    t3_target: "{{ t3_release.location | default('') | basename | regex_replace('^v', '') }}"
+
+- name: Check that GitHub answered with a stable release tag
+  ansible.builtin.assert:
+    that: t3_target is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+    fail_msg: >-
+      {{ t3_releases_url }}/latest redirected to
+      "{{ t3_release.location | default('nowhere') }}", not a stable release tag.
+    quiet: true
+
+- name: Report the T3 Code install this run would perform
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: would
+      {{ 'install' if t3_installed | length == 0 else 'update' }}
+      T3 Code {{ t3_target }} (currently {{ t3_installed or 'not installed' }}).
+  when:
+    - ansible_check_mode
+    - t3_installed | length == 0 or t3_installed is version(t3_target, '<')
+
+# --- First install: no t3 on the host yet ----------------------------------------
+#
+# The official installer, run as the account: it puts the release in
+# ~/.t3/runtime/versions/<version>/, where `t3 service install` looks for it,
+# and links ~/.local/bin/t3 to it. Downloaded to a file and run from there
+# rather than piped into sh. Skipped under --check, which has nothing
+# downloaded to work on: the report above stands in for it.
+- name: Install T3 Code {{ t3_target }}
+  when:
+    - t3_installed | length == 0
+    - not ansible_check_mode
+  block:
+    - name: Create a scratch directory for the installer
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .t3-install
+      become: true
+      become_user: "{{ t3_user }}"
+      register: t3_tmp
+
+    - name: Download the installer
+      ansible.builtin.get_url:
+        url: "{{ t3_installer_url }}"
+        dest: "{{ t3_tmp.path }}/install.sh"
+        mode: "0700"
+      become: true
+      become_user: "{{ t3_user }}"
+
+    - name: Run the installer
+      ansible.builtin.command: sh {{ t3_tmp.path }}/install.sh
+      environment:
+        T3CODE_VERSION: "{{ t3_target }}"
+        NO_COLOR: "1"
+      become: true
+      become_user: "{{ t3_user }}"
+      changed_when: true
+
+  always:
+    - name: Remove the installer
+      ansible.builtin.file:
+        path: "{{ t3_tmp.path }}"
+        state: absent
+      become: true
+      become_user: "{{ t3_user }}"
+      when: t3_tmp.path is defined
+
+# --- Lingering ---------------------------------------------------------------------
+#
+# Without it the account's systemd manager, and every user unit with it, only
+# runs while a session is open: T3 Code would stop when the last ssh closes and
+# not come back at boot. `t3 service install` tries to enable it itself, but
+# that needs root.
+- name: Keep the account's services running without a login
+  ansible.builtin.command: loginctl enable-linger {{ t3_user }}
+  args:
+    creates: /var/lib/systemd/linger/{{ t3_user }}
+  become: true
+
+# On a host nobody is logged in to, enabling lingering is what starts that
+# manager: give it the moment it needs before talking to it.
+- name: Wait for the account's systemd manager
+  ansible.builtin.wait_for:
+    path: "{{ t3_user_env.XDG_RUNTIME_DIR }}/bus"
+    timeout: 30
+  when: not ansible_check_mode
+
+# --- The service's environment -------------------------------------------------------
+#
+# Written before the service is installed or updated, so that whichever of the
+# two starts it next picks the file up.
+- name: Create T3 Code's home
+  ansible.builtin.file:
+    path: "{{ t3_home }}/.t3"
+    state: directory
+    mode: "0700"
+  become: true
+  become_user: "{{ t3_user }}"
+
+- name: Write the service's environment
+  ansible.builtin.template:
+    src: service.env.j2
+    dest: "{{ t3_home }}/.t3/service.env"
+    mode: "0600"
+  become: true
+  become_user: "{{ t3_user }}"
+  notify: Restart T3 Code
+
+# --- T3 Connect ----------------------------------------------------------------------
+#
+# Clients pair with the server directly (see README), not through the relay.
+# Unlinking only takes effect at the next start: like the environment, it is
+# done before the service is installed or updated, so whichever of the two
+# starts it next picks it up, and the restart handler covers the rest.
+- name: Read the T3 Connect state
+  ansible.builtin.command: "{{ t3_bin }} connect status --json"
+  environment: "{{ t3_user_env }}"
+  become: true
+  become_user: "{{ t3_user }}"
+  register: t3_connect
+  changed_when: false
+  failed_when: false
+  check_mode: false   # read-only, must run so --check knows what it compares to
+
+- name: Settle whether T3 Connect is enabled
+  ansible.builtin.set_fact:
+    t3_connect_desired: >-
+      {{ (t3_connect.stdout | from_json).desired | default(false)
+         if t3_connect.rc | default(1) == 0 and t3_connect.stdout is match('\s*\{')
+         else false }}
+
+- name: Report the T3 Connect unlink this run would perform
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: would run `t3 connect unlink` and restart T3 Code."
+  when:
+    - ansible_check_mode
+    - not t3_connect_enabled | bool
+    - t3_connect_desired | bool
+
+- name: Turn T3 Connect off
+  ansible.builtin.command: "{{ t3_bin }} connect unlink"
+  environment: "{{ t3_user_env }}"
+  become: true
+  become_user: "{{ t3_user }}"
+  changed_when: true
+  notify: Restart T3 Code
+  when:
+    - not t3_connect_enabled | bool
+    - t3_connect_desired | bool
+    - not ansible_check_mode
+
+# --- Update: t3 present, but behind the stable release ------------------------------
+#
+# `t3 update <version>` moves the CLI and the service together. Without a
+# terminal it only restarts the service onto the new version with --yes; see
+# t3_restart_on_update.
+- name: Update T3 Code to {{ t3_target }}
+  ansible.builtin.command:
+    argv: "{{ [t3_bin, 'update', t3_target] + (['--yes'] if t3_restart_on_update | bool else []) }}"
+  environment: "{{ t3_user_env }}"
+  become: true
+  become_user: "{{ t3_user }}"
+  register: t3_update
+  changed_when: true
+  when:
+    - t3_installed | length > 0
+    - t3_installed is version(t3_target, '<')
+    - not ansible_check_mode
+
+- name: Read the T3 Code now installed
+  ansible.builtin.command: "{{ t3_bin }} --version"
+  become: true
+  become_user: "{{ t3_user }}"
+  register: t3_version_after
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check that t3 runs the newest stable version
+  ansible.builtin.assert:
+    that: (t3_version_after.stdout | regex_search('[0-9]+\.[0-9]+\.[0-9]+')) is version(t3_target, '>=')
+    fail_msg: >-
+      {{ t3_bin }} reports "{{ t3_version_after.stdout }}"
+      after the update, not {{ t3_target }}.
+    quiet: true
+  when: not ansible_check_mode
+
+# --- The service ---------------------------------------------------------------------
+#
+# `t3 service install` writes the unit, enables it and (re)starts it. It answers
+# "already installed" when the unit is there, on this version, enabled and
+# running; anything else (no unit, an older version, a stopped or disabled
+# unit, lingering off) is listed by `t3 service status` as a problem, and
+# install is also the repair.
+- name: Read the T3 Code service's state
+  ansible.builtin.command: "{{ t3_bin }} service status"
+  environment: "{{ t3_user_env }}"
+  become: true
+  become_user: "{{ t3_user }}"
+  register: t3_service_before
+  changed_when: false
+  failed_when: false   # no t3 yet under --check
+  check_mode: false    # read-only, must run so --check knows what it compares to
+
+- name: Settle whether the service needs installing
+  ansible.builtin.set_fact:
+    t3_service_healthy: >-
+      {{ t3_service_before.rc | default(1) == 0
+         and t3_service_before.stdout is search('Status: installed')
+         and t3_service_before.stdout is not search('needs an update|newer than|\[[a-z-]+\]') }}
+
+- name: Report the service install this run would perform
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: would run `t3 service install`
+      ({{ t3_service_before.stdout | default('', true) | regex_replace('\s+', ' ') | trim or 'no t3 yet' }}).
+  when:
+    - ansible_check_mode
+    - not t3_service_healthy | bool
+
+- name: Install the T3 Code service
+  ansible.builtin.command: "{{ t3_bin }} service install"
+  environment: "{{ t3_user_env }}"
+  become: true
+  become_user: "{{ t3_user }}"
+  register: t3_service_install
+  changed_when: "'already installed' not in t3_service_install.stdout"
+  when:
+    - not t3_service_healthy | bool
+    - not ansible_check_mode
+
+# Both the update (with --yes) and the install restart the service, after
+# service.env was written and T3 Connect turned off: the handler has nothing
+# left to do then.
+- name: Note whether the service was just restarted
+  ansible.builtin.set_fact:
+    t3_service_restarted: >-
+      {{ (t3_update is changed and t3_restart_on_update | bool)
+         or t3_service_install is changed }}
+
+- name: Apply a changed service environment
+  ansible.builtin.meta: flush_handlers
+
+# 0.0.0.0 cannot be connected to; loopback answers for every interface.
+- name: Wait for T3 Code to listen
+  ansible.builtin.wait_for:
+    host: "{{ '127.0.0.1' if t3_bind_host in ['0.0.0.0', '::'] else t3_bind_host }}"
+    port: "{{ t3_service_env.T3CODE_PORT | default(3773) | int }}"
+    timeout: 60
+  vars:
+    t3_bind_host: "{{ t3_service_env.T3CODE_HOST | default('0.0.0.0') }}"
+  when: not ansible_check_mode
+
+# With neither state nor enabled, the module only reads the unit.
+- name: Read the T3 Code unit
+  ansible.builtin.systemd_service:
+    name: t3code.service
+    scope: user
+  environment: "{{ t3_user_env }}"
+  become: true
+  become_user: "{{ t3_user }}"
+  register: t3_unit
+  when: not ansible_check_mode
+
+- name: Check that the T3 Code service is enabled and running
+  ansible.builtin.assert:
+    that:
+      - t3_unit.status.ActiveState == 'active'
+      - t3_unit.status.UnitFileState == 'enabled'
+    fail_msg: >-
+      t3code.service is {{ t3_unit.status.ActiveState }} and
+      {{ t3_unit.status.UnitFileState }}: see `t3 service status` and
+      {{ t3_home }}/.t3 logs.
+    quiet: true
+  when: not ansible_check_mode
+
+# The server takes its PATH from the account's login shell, and starts
+# Claude Code from it: claude has to be found there, not only in an
+# interactive shell.
+- name: Look for claude on the login shell's PATH
+  ansible.builtin.command:
+    argv: ["{{ t3_shell }}", -lc, command -v claude]
+  become: true
+  become_user: "{{ t3_user }}"
+  register: t3_claude_path
+  changed_when: false
+  failed_when: false
+  check_mode: false   # read-only, must run so --check knows what it compares to
+
+- name: Check that T3 Code can start Claude Code
+  ansible.builtin.assert:
+    that: t3_claude_path.rc == 0
+    fail_msg: >-
+      `{{ t3_shell }} -l` finds no claude for {{ t3_user }}, so T3 Code cannot
+      start it. Run `./deploy claude`, or set Claude's binary path in T3 Code's
+      provider settings.
+    quiet: true
+
+# --- Pairing -------------------------------------------------------------------------
+#
+# Pairing a client is the one step left to a person (see README): `t3 pair`
+# mints a short-lived token, which is not something a deploy should leave
+# lying in its output. The report gives the address the token is for: the
+# host's default-route address when the server binds every interface.
+- name: Report T3 Code
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: T3 Code
+      {{ (t3_version_after.stdout | default(t3_installed, true) | regex_search('[0-9]+\.[0-9]+\.[0-9]+\S*')) or 'not installed yet' }}
+      for {{ t3_user }} (stable is {{ t3_target }}), service
+      {{ t3_unit.status.ActiveState | default('not checked under --check') }} on
+      http://{{ t3_url_host }}:{{ t3_service_env.T3CODE_PORT | default(3773) | int }},
+      T3 Connect {{ 'on' if t3_connect_enabled | bool and t3_connect_desired | bool else 'off' }}.
+      Pair a client: `t3 pair` as {{ t3_user }}.
+  vars:
+    t3_bind_host: "{{ t3_service_env.T3CODE_HOST | default('0.0.0.0') }}"
+    t3_url_host: >-
+      {{ ansible_facts['default_ipv4']['address'] | default(ansible_facts['hostname'])
+         if t3_bind_host in ['0.0.0.0', '::'] else t3_bind_host }}

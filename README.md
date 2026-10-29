@@ -39,6 +39,7 @@ roles/ennemi_webapp/     # the show webapp on ennemi-brain, as a systemd service
 roles/dev/               # development-machine toolchain (ennemi-dev only)
 roles/playwright/        # Playwright CLI, browsers and their libraries (ennemi-dev only)
 roles/claude/            # Claude Code + Serena + Worktrunk, kept on the newest release (ennemi-dev only)
+roles/t3/                # T3 Code server as a systemd user service, paired directly over the LAN (ennemi-dev only)
 ```
 
 ## Before the first run
@@ -1370,3 +1371,86 @@ false` to leave the status line alone, or `claude_worktrunk_enabled: false` to
 leave Worktrunk out of the run.
 
 Variables: see `roles/claude/defaults/main.yml`.
+
+## The `t3` role
+
+[T3 Code](https://github.com/pingdotgg/t3code) on `ennemi-dev`: the server that
+drives the Claude Code sessions of the `ennemi` account, reached from the web,
+desktop and mobile apps directly over the LAN or the tailnet. It runs in the `dev` play, after
+`claude`, and keeps T3 Code on the newest **stable** release (the tag GitHub's
+`/releases/latest` redirects to):
+
+| On the host | The role |
+|---|---|
+| no `t3` | downloads `install.sh` to a scratch directory and runs it as `ennemi` |
+| an older version | `t3 update <newest> --yes`, which moves the CLI **and restarts the service** onto it |
+| the newest version | nothing: the run reports `ok` |
+
+An update restarts the service and so interrupts agent turns, terminals and
+connected clients. Set `t3_restart_on_update: false` to install the new version
+and leave the switch to `t3 service restart` or the next boot.
+
+The CLI is `~/.local/bin/t3`, a symlink into `~/.t3/runtime/versions/`. The
+server is the systemd **user** unit `t3 service install` writes,
+`~/.config/systemd/user/t3code.service`. The role runs that command and repairs
+the unit whenever `t3 service status` lists a problem. It also enables
+lingering for `ennemi` (`loginctl enable-linger`), so the unit starts at boot
+and keeps running with nobody logged in. Logs go to
+`~/.t3/userdata/logs/boot-service.log`.
+
+The service is `t3 serve` under systemd: the same headless server, which writes
+a connection string and a pairing link to its log at every start.
+`~/.t3/service.env` belongs to the role (`t3_service_env`). It binds the server
+to `0.0.0.0:3773`, and a change to the file restarts the service. The LAN
+address comes from DHCP, and a user unit cannot wait for it at boot, so the
+server does not bind it alone.
+
+No firewall stands in front of the port: `ennemi-dev` is only reached over the
+internal network, through the VPN, so every network that reaches the host
+reaches 3773, and no client gets in without a pairing token.
+
+The server takes its `PATH` from `ennemi`'s login shell, and the role checks
+that `bash -l` finds `claude` there.
+
+```bash
+./deploy t3
+t3 service status
+systemctl --user status t3code.service
+```
+
+### Pairing a client
+
+Pairing is the one step the role leaves to a person. As `ennemi`, on this
+machine:
+
+```bash
+t3 pair --label phone      # QR code, pairing link and token, valid 5 minutes
+```
+
+`t3 pair` finds the running server and prints a link of the form
+`http://192.168.0.171:3773/pair#token=…` (the first LAN address when the server
+binds every interface). Scan the QR code, or open the link, from a device on
+the same subnet. A client that asks for a server instead takes
+`http://192.168.0.171:3773` and the token. `--ttl 1h` gives the token longer.
+`--tailscale` pairs through the tailnet's HTTPS name instead, for a device away
+from the LAN.
+
+```bash
+t3 auth pairing list       # tokens not used yet
+t3 auth session list       # paired clients
+```
+
+The service log also prints a token at every start (`tail
+~/.t3/userdata/logs/boot-service.log`).
+
+T3 Connect, the relay through the T3 account, stays **off**
+(`t3_connect_enabled: false`). Each linked machine takes one of the account's
+tunnel slots. A run that finds it enabled runs `t3 connect unlink`, which keeps
+the stored login, and restarts the service. To use the relay instead, set
+`t3_connect_enabled: true` and run `t3 connect --headless` as `ennemi`.
+
+The role does not run `sudo t3 browser setup`, the AppArmor profile and
+libraries T3's headless Chrome needs for browser tabs and HTML previews. The
+service log warns about it, and nothing else depends on it.
+
+Variables: see `roles/t3/defaults/main.yml`.

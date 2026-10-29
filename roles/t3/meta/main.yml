@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: t3
+  author: nico
+  description: T3 Code's server as a systemd user service, kept on the newest stable release, for clients paired directly over the network.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

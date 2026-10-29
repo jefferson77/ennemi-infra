@@ -1,0 +1,13 @@
+---
+# Only once the unit is there, and only when nothing restarted it since. On a
+# first install the service is created after service.env is written, so it
+# already starts with it; an update with --yes restarts it as well.
+- name: Restart T3 Code
+  ansible.builtin.command: "{{ t3_bin }} service restart"
+  become: true
+  become_user: "{{ t3_user }}"
+  environment: "{{ t3_user_env }}"
+  changed_when: true
+  when:
+    - t3_unit_before.stat.exists | default(false)
+    - not t3_service_restarted | default(false) | bool

@@ -1,0 +1,50 @@
+---
+# T3 Code (https://github.com/pingdotgg/t3code): a server that drives the
+# coding agents on this machine (Claude Code here), reached from the web,
+# desktop and mobile apps directly over the network, paired with a one-time
+# token (`t3 pair`).
+#
+# Everything lives in the account's home, as upstream's installer lays it out:
+# versioned runtimes in ~/.t3/runtime/versions/, a ~/.local/bin/t3 symlink to
+# the current one, and the data in ~/.t3/userdata. The server runs as the
+# systemd *user* unit `t3 service install` writes (~/.config/systemd/user/
+# t3code.service); the role enables lingering so that unit starts at boot and
+# outlives every login session.
+t3_user: "{{ common_user | default('ennemi') }}"
+
+# GitHub answers /releases/latest with a redirect to the newest stable tag
+# (nightly and preview builds are all prereleases, so never "latest"). The
+# role follows that channel: every run brings t3 to it.
+t3_releases_url: https://github.com/pingdotgg/t3code/releases
+
+# The official installer, only fetched on a host that has no t3 at all. Later
+# versions come through `t3 update`, which moves the CLI and the service
+# together.
+t3_installer_url: https://t3.codes/install.sh
+
+# `t3 update` asks before restarting the service, since a restart interrupts
+# agent turns, terminals and connected clients; without a terminal it leaves
+# the service on its old version. true passes --yes, so a deploy that finds a
+# new release restarts T3 Code onto it. false installs it and leaves the
+# switch to `t3 service restart` (or the next boot).
+t3_restart_on_update: true
+
+# ~/.t3/service.env: KEY=VALUE pairs the service reads at every start, taken
+# literally (no shell expansion). The role owns the file: set entries here,
+# not by hand. PATH and T3CODE_HOME are reserved by T3 and ignored there.
+#
+# The service is `t3 serve` under systemd: the same headless server, which
+# prints a connection string and a pairing link to its log at every start.
+# Clients reach it directly, so it binds every interface: the host is only
+# reached over the internal network, through the VPN, and a client still needs
+# a pairing token to get in. Binding the LAN address instead would not do: it
+# comes from DHCP, and a user unit cannot wait for it at boot.
+t3_service_env:
+  T3CODE_HOST: 0.0.0.0
+  T3CODE_PORT: "3773"
+
+# T3 Connect, the relay through the T3 account, counts this machine against
+# the account's tunnel limit. false keeps it off: a run that finds it enabled
+# (`t3 connect link`) runs `t3 connect unlink`, which keeps the stored login,
+# and restarts the service. true leaves it to whatever was set by hand.
+t3_connect_enabled: false

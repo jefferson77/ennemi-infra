@@ -96,3 +96,5 @@
       tags: [playwright]
     - role: claude
       tags: [claude]
+    - role: t3
+      tags: [t3]
