@@ -1,0 +1,65 @@
+---
+- name: Install Loki
+  ansible.builtin.apt:
+    name: "{{ loki_package }}"
+    state: present
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: loki_install
+
+- name: Create the data directory
+  ansible.builtin.file:
+    path: "{{ loki_data_dir }}"
+    state: directory
+    owner: "{{ loki_user }}"
+    group: "{{ loki_group }}"
+    mode: "0750"
+  become: true
+
+- name: Deploy the configuration
+  ansible.builtin.template:
+    src: config.yml.j2
+    dest: "{{ loki_config_file }}"
+    owner: root
+    group: "{{ loki_group }}"
+    mode: "0640"
+    backup: true
+  become: true
+  notify: Restart Loki
+
+# Under --check the package is not actually installed, so its unit cannot be
+# enabled yet: say so instead.
+- name: Enable and start Loki
+  ansible.builtin.systemd_service:
+    name: "{{ loki_service }}"
+    enabled: true
+    state: started
+  become: true
+  when: not (ansible_check_mode and loki_install is changed)
+
+- name: Say what the dry run cannot simulate
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} would install {{ loki_package }} and start {{ loki_service }}."
+  when: ansible_check_mode and loki_install is changed
+
+- name: Apply any pending restart
+  ansible.builtin.meta: flush_handlers
+
+# /ready says "ready" only once the ring has settled, some 15 s after a start.
+- name: Check that Loki is ready
+  ansible.builtin.uri:
+    url: "http://{{ loki_listen_address }}:{{ loki_http_port }}/ready"
+    return_content: true
+  register: loki_ready
+  until: loki_ready.status == 200
+  retries: 15
+  delay: 3
+  when: not ansible_check_mode
+
+- name: Report the running Loki
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Loki ready on {{ loki_listen_address }}:{{ loki_http_port }},
+      retention {{ loki_retention_period }}, data in {{ loki_data_dir }}.
+  when: loki_ready is not skipped

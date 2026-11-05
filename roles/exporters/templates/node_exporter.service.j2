@@ -1,0 +1,33 @@
+[Unit]
+Description=Prometheus Node Exporter
+Documentation=https://github.com/prometheus/node_exporter
+After=network.target
+
+[Service]
+Type=simple
+User={{ exporters_user }}
+Group={{ exporters_group }}
+
+ExecStart={{ exporters_node_binary }} \
+    --web.listen-address={{ exporters_node_listen_address }} \
+    --collector.textfile.directory={{ exporters_node_textfile_dir }}
+
+Restart=always
+RestartSec=5
+
+# Resource limits
+LimitNOFILE=65536
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier={{ exporters_node_service }}
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

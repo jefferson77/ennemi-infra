@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: alloy
+  author: nico
+  description: Grafana Alloy collecting the UniFi devices' syslog, the journal and nginx's access log into Loki.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies:
+  - role: grafana_apt

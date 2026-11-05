@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: dnsmasq
+  author: nico
+  description: dnsmasq as the show network's resolver, with its Prometheus exporter.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

@@ -1,0 +1,112 @@
+---
+# One exporter from its GitHub release tarball, the way roles/dragonfly
+# installs its binary: resolve the version, compare with what runs, replace
+# the binary only when they differ. Parameters come in the `exporter` dict:
+# name, version ("" for the latest), releases_url, tarball and unpacked_binary
+# (with "{version}" where the version goes), install_dir, binary, service.
+
+- name: Resolve the latest release of {{ exporter.name }}
+  ansible.builtin.uri:
+    url: "{{ exporter.releases_url }}/latest"
+    method: GET
+    follow_redirects: none
+    status_code: [301, 302]
+  register: exporters_latest_release
+  delegate_to: localhost
+  check_mode: false   # read-only, must run so --check knows what it compares to
+  when: exporter.version | length == 0
+
+- name: Record the version to install of {{ exporter.name }}
+  ansible.builtin.set_fact:
+    exporters_target_version: >-
+      {{ exporter.version if exporter.version | length > 0
+         else exporters_latest_release.location | basename | regex_replace('^v', '') }}
+
+- name: Look for an installed {{ exporter.name }}
+  ansible.builtin.stat:
+    path: "{{ exporter.binary }}"
+  register: exporters_binary_stat
+  become: true
+
+# Both print "<name>, version X.Y.Z (branch: ...)", on stdout or stderr.
+- name: Read the installed version of {{ exporter.name }}
+  ansible.builtin.command: "{{ exporter.binary }} --version"
+  register: exporters_version_output
+  changed_when: false
+  check_mode: false   # read-only, must run so --check knows what it compares to
+  when: exporters_binary_stat.stat.exists
+  become: true
+
+- name: Record the installed version of {{ exporter.name }}
+  ansible.builtin.set_fact:
+    exporters_installed_version: >-
+      {{ ((exporters_version_output.stdout | default('')) ~ (exporters_version_output.stderr | default('')))
+         | regex_search('version ([0-9]+\.[0-9]+\.[0-9]+)', '\1') | default([''], true) | first }}
+
+- name: Report the install this run would perform for {{ exporter.name }}
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: would install {{ exporter.name }} {{ exporters_target_version }}
+      (currently {{ exporters_installed_version | default('', true) | ternary(exporters_installed_version, 'not installed') }}).
+  when:
+    - ansible_check_mode
+    - exporters_installed_version != exporters_target_version
+
+- name: Install the target release of {{ exporter.name }}
+  when:
+    - exporters_installed_version != exporters_target_version
+    - not ansible_check_mode
+  become: true
+  vars:
+    exporters_staging_dir: "/var/tmp/{{ exporter.name }}-{{ exporters_target_version }}"
+    exporters_tarball: "{{ exporter.tarball | replace('{version}', exporters_target_version) }}"
+    exporters_unpacked_binary: "{{ exporter.unpacked_binary | replace('{version}', exporters_target_version) }}"
+  block:
+    - name: Create the installation directory
+      ansible.builtin.file:
+        path: "{{ exporter.install_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Create a staging directory for the release
+      ansible.builtin.file:
+        path: "{{ exporters_staging_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Download the release tarball
+      ansible.builtin.get_url:
+        url: "{{ exporter.releases_url }}/download/v{{ exporters_target_version }}/{{ exporters_tarball }}"
+        dest: "{{ exporters_staging_dir }}/{{ exporters_tarball }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Unpack it
+      ansible.builtin.unarchive:
+        src: "{{ exporters_staging_dir }}/{{ exporters_tarball }}"
+        dest: "{{ exporters_staging_dir }}"
+        remote_src: true
+
+    - name: Check that the new binary runs on this host
+      ansible.builtin.command: "{{ exporters_staging_dir }}/{{ exporters_unpacked_binary }} --version"
+      changed_when: false
+
+    - name: Install the binary
+      ansible.builtin.copy:
+        src: "{{ exporters_staging_dir }}/{{ exporters_unpacked_binary }}"
+        dest: "{{ exporter.binary }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Restart the exporters
+
+    - name: Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ exporters_staging_dir }}"
+        state: absent

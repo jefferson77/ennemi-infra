@@ -1,0 +1,14 @@
+---
+- name: Restart Alloy
+  ansible.builtin.systemd_service:
+    name: "{{ alloy_service }}"
+    state: restarted
+  become: true
+
+# SIGHUP re-reads the config without closing the syslog socket for long; the
+# package's unit declares the ExecReload.
+- name: Reload Alloy
+  ansible.builtin.systemd_service:
+    name: "{{ alloy_service }}"
+    state: reloaded
+  become: true

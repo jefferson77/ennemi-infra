@@ -55,6 +55,11 @@ server {
         return 301 https://www.ennemi.net$request_uri;
     }
 
+    # The default log, and a JSON one beside it with the request timings, read
+    # by Alloy into Loki (conf.d/log_format_json.conf, roles/alloy).
+    access_log /var/log/nginx/access.log;
+    access_log /var/log/nginx/access.json.log ennemi_json;
+
     # SSL Certificates - one lineage for all three names. It renews by DNS-01:
     # internal.ennemi.net resolves to addresses Let's Encrypt cannot reach.
     ssl_certificate /etc/letsencrypt/live/www.ennemi.net/fullchain.pem;
@@ -193,6 +198,16 @@ server {
 
         # Buffering settings
         proxy_buffering off;
+    }
+
+    # ========================================
+    # APP METRICS - LOCALHOST ONLY
+    # ========================================
+    # The show app's Prometheus metrics (webapp specs/metrics.md). Scraped by
+    # the Prometheus on this host straight from 127.0.0.1:3000, never through
+    # nginx: from outside the route does not exist.
+    location = /api/metrics {
+        return 404;
     }
 
     # ========================================

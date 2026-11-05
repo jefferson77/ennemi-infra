@@ -63,3 +63,24 @@ certbot_dns_ovh_consumer_key: >-
   {{ lookup('ansible.builtin.ini', 'OVH_CONSUMER_KEY',
             type='properties', file=ennemi_env_file, errors='ignore')
      | default('', true) }}
+
+# The password of Grafana's admin account on the monitoring host (roles/grafana).
+# Grafana reads it only when it first creates its database; it is kept here so
+# a rebuilt host comes up with the same one.
+grafana_admin_password: >-
+  {{ lookup('ansible.builtin.ini', 'GRAFANA_ADMIN_PASSWORD',
+            type='properties', file=ennemi_env_file, errors='ignore')
+     | default('', true) }}
+
+# The local, read-only account unpoller logs in to the UniFi console with
+# (roles/unpoller). Required on the monitoring host: the role refuses to run
+# without both.
+unpoller_unifi_user: >-
+  {{ lookup('ansible.builtin.ini', 'UNPOLLER_USER',
+            type='properties', file=ennemi_env_file, errors='ignore')
+     | default('', true) }}
+
+unpoller_unifi_password: >-
+  {{ lookup('ansible.builtin.ini', 'UNPOLLER_PASSWORD',
+            type='properties', file=ennemi_env_file, errors='ignore')
+     | default('', true) }}

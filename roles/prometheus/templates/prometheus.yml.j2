@@ -1,0 +1,11 @@
+# Managed by the ennemi infrastructure (roles/prometheus). The jobs come from
+# prometheus_scrape_configs (the baseline every monitoring host has) and
+# prometheus_extra_scrape_configs (this host's own, in host_vars).
+{{ {
+  'global': {
+    'scrape_interval': prometheus_scrape_interval,
+    'evaluation_interval': prometheus_evaluation_interval,
+    'external_labels': prometheus_external_labels,
+  },
+  'scrape_configs': prometheus_scrape_configs + prometheus_extra_scrape_configs,
+} | to_nice_yaml(indent=2, sort_keys=false, width=120) }}

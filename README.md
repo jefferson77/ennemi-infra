@@ -40,6 +40,15 @@ roles/dev/               # development-machine toolchain (ennemi-dev only)
 roles/playwright/        # Playwright CLI, browsers and their libraries (ennemi-dev only)
 roles/claude/            # Claude Code + Serena + Worktrunk, kept on the newest release (ennemi-dev only)
 roles/t3/                # T3 Code server as a systemd user service, paired directly over the LAN (ennemi-dev only)
+roles/grafana_apt/       # Grafana Labs' apt repository, shared by the three roles below that install from it
+roles/prometheus/        # Prometheus, with its scrape jobs rendered from variables (ennemi-brain only)
+roles/exporters/         # node_exporter and nginx_exporter, from their release tarballs
+roles/dnsmasq/           # dnsmasq as the show network's resolver, with its Prometheus exporter
+roles/loki/              # Loki, the log store beside Prometheus, single binary on the local disk
+roles/alloy/             # Grafana Alloy: the UniFi devices' syslog, the journal and nginx's log into Loki
+roles/unpoller/          # unpoller, the UniFi console's Prometheus exporter and Loki forwarder
+roles/grafana/           # Grafana, with its datasources and dashboards provisioned from here
+docs/load-test-observability.md  # plan: KPIs, UniFi/log/metric collection and the Grafana dashboards for the load tests
 ```
 
 ## Before the first run
@@ -72,6 +81,8 @@ Anything starting with `-` is passed straight through to `ansible-playbook`.
 ./deploy cache                 # every role, on the hosts that run the cache
 ./deploy postgres              # only the postgres role
 ./deploy database              # every role, on the hosts that run a database
+./deploy monitoring            # every role, on the host that runs the monitoring stack
+./deploy grafana               # only the grafana role (prometheus, loki, alloy, unpoller... likewise)
 ./deploy --tags=dev            # only the dev role (see the note below)
 ./deploy prod common           # both restrictions at once
 ./deploy --check --diff        # dry run
@@ -117,6 +128,8 @@ cp .env.example .env      # then fill in the real values
 | `SHOW_TOKEN` | the show app on `ennemi-brain` switching www.ennemi.net (`ennemi_webapp`, optional) — a copy of `ennemi-web`'s |
 | `WEBAPP_SESSION_PASSWORD` | the show app's Control login cookie (`ennemi_webapp`, required, ≥ 32 characters) |
 | `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY` | DNS-01 through OVH's API (`certbot`, required for a `method: dns-ovh` certificate) — see [DNS-01 through OVH](#dns-01-through-ovh-method-dns-ovh) |
+| `GRAFANA_ADMIN_PASSWORD` | Grafana's admin account on `ennemi-brain` (`grafana`, required there; read by Grafana only when it first creates its database) |
+| `UNPOLLER_USER`, `UNPOLLER_PASSWORD` | the local, read-only UniFi console account unpoller polls with (`unpoller`, required on `ennemi-brain`) |
 
 `inventory/group_vars/all.yml` is the only place that reads the file, with an
 `ini` lookup in `properties` mode, and the path is derived from the inventory

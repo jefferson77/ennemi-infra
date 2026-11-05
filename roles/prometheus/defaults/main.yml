@@ -1,0 +1,62 @@
+---
+# Prometheus, as found on ennemi-brain: the upstream release binary under
+# /opt/prometheus, a unit in /etc/systemd/system, data in /var/lib/prometheus,
+# served behind nginx at https://www.ennemi.net/prometheus.
+#
+# Pinned to the version that is there, so adopting the install changes
+# nothing. Bump deliberately; empty means the latest GitHub release.
+prometheus_version: "3.1.0"
+prometheus_releases_url: https://github.com/prometheus/prometheus/releases
+prometheus_arch: "{{ 'linux-arm64' if ansible_facts['architecture'] == 'aarch64' else 'linux-amd64' }}"
+prometheus_install_dir: /opt/prometheus
+prometheus_binary: "{{ prometheus_install_dir }}/prometheus"
+prometheus_promtool: "{{ prometheus_install_dir }}/promtool"
+prometheus_staging_dir: "/var/tmp/prometheus-{{ prometheus_target_version | default('unset') }}"
+
+prometheus_user: prometheus
+prometheus_group: prometheus
+prometheus_data_dir: /var/lib/prometheus/data
+prometheus_config_dir: /etc/prometheus
+prometheus_config_file: "{{ prometheus_config_dir }}/prometheus.yml"
+
+prometheus_service: prometheus
+prometheus_unit_file: "/etc/systemd/system/{{ prometheus_service }}.service"
+prometheus_service_enabled: true
+prometheus_service_state: started
+
+prometheus_listen_address: 127.0.0.1:9090
+prometheus_external_url: https://www.ennemi.net/prometheus
+prometheus_route_prefix: /prometheus
+prometheus_retention_time: 30d
+
+prometheus_scrape_interval: 15s
+prometheus_evaluation_interval: 15s
+prometheus_external_labels:
+  monitor: ennemi-server
+  environment: production
+
+# The scrape jobs, in Prometheus's own shape (each entry is one item of
+# scrape_configs, dumped as it is). These four are what every host of the
+# monitoring group has: the server itself, the host, nginx and Dragonfly. A
+# host adds its own in prometheus_extra_scrape_configs (host_vars).
+prometheus_scrape_configs:
+  - job_name: prometheus
+    metrics_path: "{{ prometheus_route_prefix }}/metrics"
+    static_configs:
+      - targets: ["{{ prometheus_listen_address }}"]
+        labels: {instance: ennemi, service: prometheus}
+  - job_name: node_exporter
+    static_configs:
+      - targets: ["127.0.0.1:9100"]
+        labels: {instance: ennemi, service: node_exporter}
+  - job_name: nginx_exporter
+    static_configs:
+      - targets: ["127.0.0.1:9113"]
+        labels: {instance: ennemi, service: nginx}
+  - job_name: dragonfly
+    fallback_scrape_protocol: PrometheusText0.0.4
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:6379"]
+        labels: {instance: ennemi, service: dragonfly}
+prometheus_extra_scrape_configs: []

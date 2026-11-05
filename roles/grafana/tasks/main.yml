@@ -1,0 +1,129 @@
+---
+- name: Fail early without an admin password
+  ansible.builtin.assert:
+    that: grafana_admin_password | length > 0
+    fail_msg: >-
+      GRAFANA_ADMIN_PASSWORD in .env is missing. It is the password of the
+      {{ grafana_admin_user }} account Grafana is created with; put it in .env
+      and run again.
+    quiet: true
+
+- name: Install Grafana
+  ansible.builtin.apt:
+    name: "{{ grafana_package }}"
+    state: present
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+# Only the keys this project sets; the rest of the packaged file is left as
+# the package ships it. no_log on the password line alone.
+- name: Configure the server address and the public URL
+  community.general.ini_file:
+    path: "{{ grafana_ini }}"
+    section: "{{ item.section }}"
+    option: "{{ item.option }}"
+    value: "{{ item.value }}"
+    no_extra_spaces: false
+    owner: root
+    group: "{{ grafana_group }}"
+    mode: "0640"
+    backup: true
+  become: true
+  loop:
+    - {section: server, option: http_addr, value: "{{ grafana_http_addr }}"}
+    - {section: server, option: http_port, value: "{{ grafana_http_port }}"}
+    - {section: server, option: root_url, value: "{{ grafana_root_url }}"}
+    - {section: server, option: serve_from_sub_path, value: "true"}
+    - {section: security, option: admin_user, value: "{{ grafana_admin_user }}"}
+  loop_control:
+    label: "[{{ item.section }}] {{ item.option }}"
+  notify: Restart Grafana
+
+- name: Configure the admin password
+  community.general.ini_file:
+    path: "{{ grafana_ini }}"
+    section: security
+    option: admin_password
+    value: "{{ grafana_admin_password }}"
+    no_extra_spaces: false
+    owner: root
+    group: "{{ grafana_group }}"
+    mode: "0640"
+  become: true
+  no_log: true
+  notify: Restart Grafana
+
+- name: Create the provisioning directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: "{{ grafana_group }}"
+    mode: "0755"
+  become: true
+  loop:
+    - "{{ grafana_provisioning_dir }}/datasources"
+    - "{{ grafana_provisioning_dir }}/dashboards"
+    - "{{ grafana_dashboards_dir }}"
+
+# Datasources are read at start only: a change restarts Grafana. No backup
+# copies here: Grafana would read them too.
+- name: Provision the datasources
+  ansible.builtin.template:
+    src: datasources.yml.j2
+    dest: "{{ grafana_provisioning_dir }}/datasources/prometheus.yml"
+    owner: root
+    group: "{{ grafana_group }}"
+    mode: "0640"
+  become: true
+  notify: Restart Grafana
+
+- name: Provision the dashboards provider
+  ansible.builtin.template:
+    src: dashboards.yml.j2
+    dest: "{{ grafana_provisioning_dir }}/dashboards/dashboards.yml"
+    owner: root
+    group: "{{ grafana_group }}"
+    mode: "0640"
+  become: true
+  notify: Restart Grafana
+
+# Picked up within 30 s by the provider above, no restart needed. A dashboard
+# removed from the repository stays on the host until deleted by hand: the
+# provider has disableDeletion off, so it can be, from the UI.
+- name: Provision the dashboards
+  ansible.builtin.copy:
+    src: dashboards/
+    dest: "{{ grafana_dashboards_dir }}/"
+    owner: root
+    group: "{{ grafana_group }}"
+    mode: "0640"
+  become: true
+
+- name: Enable and start Grafana
+  ansible.builtin.systemd_service:
+    name: "{{ grafana_service }}"
+    enabled: true
+    state: started
+  become: true
+
+- name: Apply any pending restart
+  ansible.builtin.meta: flush_handlers
+
+- name: Check that Grafana answers
+  ansible.builtin.uri:
+    url: "http://{{ grafana_http_addr }}:{{ grafana_http_port }}/api/health"
+    return_content: true
+  register: grafana_health
+  until: grafana_health.status == 200
+  retries: 10
+  delay: 3
+  when: not ansible_check_mode
+
+- name: Report the running Grafana
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Grafana {{ (grafana_health.content | from_json).version | default('?') }}
+      on {{ grafana_http_addr }}:{{ grafana_http_port }}, served at {{ grafana_root_url }}.
+  when: grafana_health is not skipped

@@ -1,0 +1,31 @@
+---
+# Grafana, as found on ennemi-brain: the apt package, bound to localhost,
+# served by nginx at https://www.ennemi.net/grafana. This role owns the few
+# settings in use, the datasources, and the dashboards, which are provisioned
+# from files/dashboards/ in this repository.
+grafana_package: grafana
+grafana_service: grafana-server
+grafana_ini: /etc/grafana/grafana.ini
+grafana_user: grafana
+grafana_group: grafana
+grafana_provisioning_dir: /etc/grafana/provisioning
+
+grafana_http_addr: 127.0.0.1
+grafana_http_port: 3001
+grafana_root_url: https://www.ennemi.net/grafana
+
+grafana_admin_user: ennemi
+# From .env (GRAFANA_ADMIN_PASSWORD), through inventory/group_vars/all.yml.
+# Grafana reads it when it creates its database and never again: changing it
+# here later does nothing to an existing install (use the UI, or grafana-cli
+# admin reset-admin-password), but a rebuilt host comes up with it.
+grafana_admin_password: ""
+
+grafana_prometheus_url: http://127.0.0.1:9090/prometheus
+grafana_loki_url: http://127.0.0.1:3100
+
+# The dashboards folder and the provider that loads it, as they were set up
+# by hand. allowUiUpdates keeps an edit made in the UI in Grafana's database
+# but never writes it back to disk: edit, Export as JSON, commit it here.
+grafana_dashboards_folder: System Monitoring
+grafana_dashboards_dir: "{{ grafana_provisioning_dir }}/dashboards/dashboards"

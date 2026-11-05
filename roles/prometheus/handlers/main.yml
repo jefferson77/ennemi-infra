@@ -1,0 +1,14 @@
+---
+- name: Restart Prometheus
+  ansible.builtin.systemd_service:
+    name: "{{ prometheus_service }}"
+    state: restarted
+  become: true
+
+# SIGHUP through the unit's ExecReload: the config is re-read, the TSDB and
+# the scrape history stay. A unit change in the same run restarts anyway.
+- name: Reload Prometheus
+  ansible.builtin.systemd_service:
+    name: "{{ prometheus_service }}"
+    state: reloaded
+  become: true

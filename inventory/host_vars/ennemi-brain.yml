@@ -20,6 +20,7 @@ nginx_sites:
 
 nginx_conf_d:
   - stub_status.conf
+  - log_format_json.conf
 
 # The ennemi.net site serves the webapp's pre-compressed build with
 # brotli_static, a fatal `nginx -t` error without the brotli modules. They were
@@ -31,3 +32,45 @@ nginx_brotli: true
 # suffix as split DNS on tailscale0, which is how the webapp reaches
 # ennemi-vps.tail21508.ts.net (roles/ennemi_webapp); the LAN router still
 # answers everything else.
+
+# Monitoring (docs/load-test-observability.md). The UniFi devices, by the
+# address each sends its syslog from, so a line carries the name everyone
+# uses. The APs and the switch hold DHCP leases on the Admin network: should
+# one move, a line still gets in under the device's own hostname.
+alloy_unifi_devices:
+  - {name: "UCG-Fiber", ip: 192.168.108.1, kind: gateway}
+  - {name: "U7 In-Wall Regie", ip: 192.168.8.180, kind: ap}
+  - {name: "U7 Lite Droite", ip: 192.168.8.217, kind: ap}
+  - {name: "U7 Outdoor Droite", ip: 192.168.8.69, kind: ap}
+  - {name: "U7 Lite Gauche", ip: 192.168.8.74, kind: ap}
+  - {name: "UK Ultra", ip: 192.168.8.101, kind: ap}
+  - {name: "U7 Outdoor Gauche", ip: 192.168.8.81, kind: ap}
+  - {name: "USW Flex 2.5G", ip: 192.168.8.75, kind: switch}
+
+# The scrape jobs beyond the baseline of roles/prometheus: everything this
+# host runs for the load tests. unpoller polls the console on each scrape,
+# hence the slower cadence and the long timeout.
+prometheus_extra_scrape_configs:
+  - job_name: unpoller
+    scrape_interval: 30s
+    scrape_timeout: 25s
+    static_configs:
+      - targets: ["127.0.0.1:9130"]
+        labels: {instance: ennemi, service: unifi}
+  - job_name: dnsmasq_exporter
+    static_configs:
+      - targets: ["127.0.0.1:9153"]
+        labels: {instance: ennemi, service: dnsmasq}
+  - job_name: ennemi_webapp
+    metrics_path: /api/metrics
+    static_configs:
+      - targets: ["127.0.0.1:3000"]
+        labels: {instance: ennemi, service: ennemi-webapp}
+  - job_name: loki
+    static_configs:
+      - targets: ["127.0.0.1:3100"]
+        labels: {instance: ennemi, service: loki}
+  - job_name: alloy
+    static_configs:
+      - targets: ["127.0.0.1:12345"]
+        labels: {instance: ennemi, service: alloy}

@@ -75,6 +75,30 @@
     - role: ennemi_webapp
       tags: [ennemi_webapp]
 
+# The monitoring stack, on the host that sits inside the venue network. After
+# the show webapp, whose /api/metrics is one of the scrape targets. Loki
+# before Alloy and unpoller, which push to it; Prometheus before Grafana,
+# which reads it. The nginx pieces (the JSON access log, the 404 on
+# /api/metrics from outside) are in the nginx role, in the baseline play.
+- name: Apply the monitoring stack
+  hosts: monitoring
+  gather_facts: true
+  roles:
+    - role: prometheus
+      tags: [prometheus]
+    - role: exporters
+      tags: [exporters]
+    - role: dnsmasq
+      tags: [dnsmasq]
+    - role: loki
+      tags: [loki]
+    - role: alloy
+      tags: [alloy]
+    - role: unpoller
+      tags: [unpoller]
+    - role: grafana
+      tags: [grafana]
+
 # The development machine gets one extra role. A separate play scoped to the
 # "dev" group, rather than a `when:` on the role, so the role never has to know
 # which host it is running on and `./deploy dev` reads the same as the rest.

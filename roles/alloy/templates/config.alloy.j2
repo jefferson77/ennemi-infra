@@ -1,0 +1,233 @@
+// Managed by the ennemi infrastructure (roles/alloy).
+//
+// Three sources, one sink. Every label is from a bounded set (a device name,
+// a unit, an event type), never a client address or a free string: Loki's
+// index stays small whatever the room does.
+
+logging {
+  level = "warn"
+}
+
+loki.write "local" {
+  endpoint {
+    url = "{{ alloy_loki_push_url }}"
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The UniFi devices: APs, switch and gateway, by syslog over UDP.
+// ---------------------------------------------------------------------------
+loki.source.syslog "unifi" {
+  listener {
+    address                          = "{{ alloy_syslog_listen_address }}"
+    protocol                         = "udp"
+    syslog_format                    = "rfc3164"
+    // The devices stamp lines in their own local time with no year: the time
+    // of arrival here, in UTC, is the one worth keeping.
+    use_incoming_timestamp           = false
+    rfc3164_default_to_current_year  = true
+    label_structured_data            = false
+    labels                           = {
+      job = "unifi",
+    }
+  }
+  relabel_rules = loki.relabel.unifi.rules
+  forward_to    = [loki.process.unifi.receiver]
+}
+
+loki.relabel "unifi" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__syslog_message_hostname"]
+    target_label  = "host"
+  }
+  rule {
+    source_labels = ["__syslog_message_app_name"]
+    target_label  = "app"
+  }
+  rule {
+    source_labels = ["__syslog_message_severity"]
+    target_label  = "severity"
+  }
+  rule {
+    target_label = "kind"
+    replacement  = "unknown"
+  }
+{% for device in alloy_unifi_devices %}
+  rule {
+    source_labels = ["__syslog_connection_ip_address"]
+    regex         = "{{ device.ip | replace('.', '\\\\.') }}"
+    target_label  = "device"
+    replacement   = "{{ device.name }}"
+  }
+  rule {
+    source_labels = ["__syslog_connection_ip_address"]
+    regex         = "{{ device.ip | replace('.', '\\\\.') }}"
+    target_label  = "kind"
+    replacement   = "{{ device.kind }}"
+  }
+{% endfor %}
+  // A device not listed above still gets in, under the name it calls itself.
+  rule {
+    source_labels = ["device", "__syslog_message_hostname"]
+    regex         = ";(.+)"
+    target_label  = "device"
+    replacement   = "$1"
+  }
+}
+
+loki.process "unifi" {
+  // The devices fill the syslog TAG with a tag of their own (an AP: its mac and
+  // model, "942a6f7c7950,U7-Lite-8.7.11+19419"; the gateway: its hostname), and
+  // the program comes first in the message: "hostapd: ...", "stahtd[4210]: ...",
+  // "dnsmasq-dhcp[1962608]: ...". So `app` is taken from there. The gateway
+  // repeats its hostname at the head of the message and the APs' wevent lines
+  // start with a stray ": ", both skipped. The gateway's firewall lines
+  // ("[LAN_LOCAL-RET-2147483647] DESCR=...") have no program: they become
+  // app="firewall"; anything else unrecognised is app="other".
+  stage.regex {
+    expression = "^(?:[A-Za-z0-9_-]+ |: )?(?:(?P<program>[A-Za-z0-9_.-]+)(?:\\[\\d+\\])?: |(?P<firewall>\\[[A-Z_]+-[A-Z]+-\\d+\\]) )"
+  }
+  stage.template {
+    source   = "program"
+    template = "{% raw %}{{ if .firewall }}firewall{{ else if .program }}{{ .program }}{{ else }}other{{ end }}{% endraw %}"
+  }
+  stage.labels {
+    values = {
+      app = "program",
+    }
+  }
+
+  // The APs' station tracker: one JSON event per client per step of its join
+  // (association, success, failure, soft failure, deny, sta_leave).
+  stage.match {
+    selector = "{app=\"stahtd\"}"
+    stage.regex {
+      expression = "stahtd_dump_event\\(\\): (?P<tracker>\\{.*\\})$"
+    }
+    stage.json {
+      source      = "tracker"
+      expressions = {
+        event_type = "event_type",
+        vap        = "vap",
+      }
+    }
+    stage.labels {
+      values = {
+        event_type = "",
+        vap        = "",
+      }
+    }
+  }
+
+  // The gateway's DHCP server: DHCPDISCOVER(br9) ... / no address available.
+  stage.match {
+    selector = "{app=\"dnsmasq-dhcp\"}"
+    // Two stages, not one alternation: a DISCOVER that got no address carries
+    // both ("DHCPDISCOVER(br9) aa:bb... no address available"), and the empty
+    // pool is the fact worth the label.
+    stage.regex {
+      expression = "(?P<dhcp_op>DHCP[A-Z]+)\\("
+    }
+    stage.regex {
+      expression = "(?P<dhcp_noaddr>no address available)"
+    }
+    stage.template {
+      source   = "dhcp_op"
+      template = "{% raw %}{{ if .dhcp_noaddr }}NOADDRESS{{ else }}{{ .dhcp_op }}{{ end }}{% endraw %}"
+    }
+    stage.labels {
+      values = {
+        dhcp_op = "",
+      }
+    }
+  }
+
+  // hostapd on the APs: the 802.11 state changes of a client.
+  stage.match {
+    selector = "{app=\"hostapd\"}"
+    stage.regex {
+      expression = "IEEE 802\\.11: (?P<hostapd_event>authenticated|associated|disassociated|deauthenticated)"
+    }
+    stage.labels {
+      values = {
+        hostapd_event = "",
+      }
+    }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+// ---------------------------------------------------------------------------
+// This host's journal: the show app, the resolver, nginx, the stack itself.
+// ---------------------------------------------------------------------------
+loki.source.journal "system" {
+  max_age       = "12h"
+  labels        = {
+    job = "journal",
+  }
+  relabel_rules = loki.relabel.journal.rules
+  forward_to    = [loki.write.local.receiver]
+}
+
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    regex         = "(.+)\\.service"
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_syslog_identifier"]
+    target_label  = "identifier"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+  rule {
+    source_labels = ["unit"]
+    regex         = "{{ alloy_journal_units | join('|') }}"
+    action        = "keep"
+  }
+}
+
+// ---------------------------------------------------------------------------
+// nginx's JSON access log (roles/nginx, conf.d/log_format_json.conf).
+// ---------------------------------------------------------------------------
+local.file_match "nginx_access" {
+  path_targets = [{
+    __path__ = "{{ alloy_nginx_access_log }}",
+    job      = "nginx-access",
+  }]
+}
+
+loki.source.file "nginx_access" {
+  targets    = local.file_match.nginx_access.targets
+  forward_to = [loki.process.nginx_access.receiver]
+}
+
+loki.process "nginx_access" {
+  stage.json {
+    expressions = {
+      status  = "status",
+      uri     = "uri",
+      upgrade = "http_upgrade",
+    }
+  }
+  // The route group, a bounded set, rather than the uri itself.
+  stage.template {
+    source   = "route"
+    template = "{% raw %}{{ if eq .uri \"/api/websocket\" }}websocket{{ else if hasPrefix \"/_nuxt/\" .uri }}static{{ else if hasPrefix \"/api/\" .uri }}api{{ else if hasPrefix \"/images/\" .uri }}images{{ else if hasPrefix \"/audio/\" .uri }}audio{{ else if hasPrefix \"/live/\" .uri }}live{{ else if hasPrefix \"/grafana/\" .uri }}grafana{{ else if hasPrefix \"/prometheus/\" .uri }}prometheus{{ else }}page{{ end }}{% endraw %}"
+  }
+  stage.labels {
+    values = {
+      status = "",
+      route  = "",
+    }
+  }
+  forward_to = [loki.write.local.receiver]
+}

@@ -1,0 +1,14 @@
+# Managed by the ennemi infrastructure (roles/grafana).
+apiVersion: 1
+
+providers:
+  - name: 'Ennemi Monitoring'
+    orgId: 1
+    folder: '{{ grafana_dashboards_folder }}'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: {{ grafana_dashboards_dir }}
+      foldersFromFilesStructure: false

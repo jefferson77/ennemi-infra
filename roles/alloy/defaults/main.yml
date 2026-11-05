@@ -1,0 +1,43 @@
+---
+# Grafana Alloy, the collector that feeds Loki: the UniFi devices' syslog,
+# this host's journal, and nginx's JSON access log. One process, one config.
+alloy_package: alloy
+alloy_service: alloy
+alloy_config_file: /etc/alloy/config.alloy
+alloy_defaults_file: /etc/default/alloy
+alloy_user: alloy
+# adm reads /var/log/nginx, systemd-journal reads the journal.
+alloy_user_groups:
+  - adm
+  - systemd-journal
+
+alloy_listen_address: 127.0.0.1:12345
+alloy_loki_push_url: http://127.0.0.1:3100/loki/api/v1/push
+
+# The syslog listener the UniFi console is pointed at (Settings -> System ->
+# Remote Logging). UDP, BSD format, on an unprivileged port so the service
+# needs no capability.
+alloy_syslog_listen_address: 0.0.0.0:1514
+# The devices, by the address they send from, so each line carries the name
+# everyone uses rather than an IP: {name, ip, kind: ap|switch|gateway}. Set in
+# host_vars; a line from an address not listed here still gets in, under its
+# own hostname and kind "unknown".
+alloy_unifi_devices: []
+
+# The journal units worth a label of their own; anything else is dropped.
+alloy_journal_units:
+  - ennemi-webapp
+  - dnsmasq
+  - prometheus-dnsmasq-exporter
+  - nginx
+  - dragonfly
+  - postgresql@18-main
+  - prometheus
+  - node_exporter
+  - nginx_exporter
+  - loki
+  - alloy
+  - unpoller
+  - grafana-server
+
+alloy_nginx_access_log: /var/log/nginx/access.json.log

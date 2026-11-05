@@ -1,0 +1,81 @@
+---
+- name: Install Alloy
+  ansible.builtin.apt:
+    name: "{{ alloy_package }}"
+    state: present
+  become: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: alloy_install
+
+- name: Let the service account read the logs and the journal
+  ansible.builtin.user:
+    name: "{{ alloy_user }}"
+    groups: "{{ alloy_user_groups }}"
+    append: true
+  become: true
+  notify: Restart Alloy
+  when: not (ansible_check_mode and alloy_install is changed)
+
+# The package's unit reads its flags from here: the config file, and the
+# address of Alloy's own HTTP server (its /metrics, and the UI if ever wanted).
+- name: Configure the service flags
+  ansible.builtin.copy:
+    dest: "{{ alloy_defaults_file }}"
+    content: |
+      # Managed by the ennemi infrastructure (roles/alloy).
+      CONFIG_FILE="{{ alloy_config_file }}"
+      CUSTOM_ARGS="--server.http.listen-addr={{ alloy_listen_address }} --disable-reporting"
+      RESTART_ON_UPGRADE=true
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: Restart Alloy
+
+- name: Deploy the configuration
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: "{{ alloy_config_file }}"
+    owner: root
+    group: "{{ alloy_user }}"
+    mode: "0640"
+    validate: "{{ omit if (ansible_check_mode and alloy_install is changed) else 'alloy fmt %s' }}"
+    backup: true
+  become: true
+  notify: Reload Alloy
+
+# Under --check the package is not actually installed, so its unit cannot be
+# enabled yet: say so instead.
+- name: Enable and start Alloy
+  ansible.builtin.systemd_service:
+    name: "{{ alloy_service }}"
+    enabled: true
+    state: started
+  become: true
+  when: not (ansible_check_mode and alloy_install is changed)
+
+- name: Say what the dry run cannot simulate
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} would install {{ alloy_package }} and start {{ alloy_service }}."
+  when: ansible_check_mode and alloy_install is changed
+
+- name: Apply any pending reload or restart
+  ansible.builtin.meta: flush_handlers
+
+- name: Check that Alloy is ready
+  ansible.builtin.uri:
+    url: "http://{{ alloy_listen_address }}/-/ready"
+  register: alloy_ready
+  until: alloy_ready.status == 200
+  retries: 10
+  delay: 3
+  when: not ansible_check_mode
+
+- name: Report the running Alloy
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Alloy ready on {{ alloy_listen_address }},
+      syslog listener on {{ alloy_syslog_listen_address }} for
+      {{ alloy_unifi_devices | length }} named devices, pushing to {{ alloy_loki_push_url }}.
+  when: alloy_ready is not skipped

@@ -1,0 +1,9 @@
+---
+- name: Restart the exporters
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: restarted
+  become: true
+  loop:
+    - "{{ exporters_node_service }}"
+    - "{{ exporters_nginx_service }}"

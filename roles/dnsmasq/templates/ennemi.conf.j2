@@ -1,0 +1,37 @@
+# Local DNS for the show network.
+# ennemi.net and every subdomain (www, dev, ...) resolve to this host;
+# everything else is forwarded to the router, i.e. the ISP resolver.
+
+# Listen only on the LAN address; 127.0.0.53 stays with systemd-resolved.
+listen-address={{ dnsmasq_listen_address }}
+bind-interfaces
+
+# Override: apex + all subdomains -> this machine.
+address=/{{ dnsmasq_local_domain }}/{{ dnsmasq_local_address }}
+# Answer every record type for the zone here; never forward ennemi.net upstream.
+local=/{{ dnsmasq_local_domain }}/
+
+# Upstream: the router (current DHCP-provided resolver). Ignore /etc/resolv.conf.
+no-resolv
+{% for upstream in dnsmasq_upstreams %}
+server={{ upstream }}
+{% endfor %}
+
+# Don't forward junk upstream, and disable an upstream that answers with our own queries.
+domain-needed
+bogus-priv
+dns-loop-detect
+
+cache-size={{ dnsmasq_cache_size }}
+dns-forward-max={{ dnsmasq_forward_max }}
+{% if dnsmasq_all_servers %}
+
+# Query every upstream at once and use the first answer (added 2026-11-05).
+all-servers
+{% endif %}
+{% if dnsmasq_log_queries %}
+
+# A line per query, for a load test (roles/dnsmasq, dnsmasq_log_queries).
+log-queries=extra
+log-async={{ dnsmasq_log_async }}
+{% endif %}

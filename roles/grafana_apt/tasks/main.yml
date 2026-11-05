@@ -1,0 +1,59 @@
+---
+- name: Install the repository prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+    state: present
+  become: true
+
+- name: Read the apt architecture
+  ansible.builtin.command: dpkg --print-architecture
+  register: grafana_apt_dpkg_arch
+  changed_when: false
+  check_mode: false   # read-only, must run so --check sees the real value
+
+- name: Create the keyring directory
+  ansible.builtin.file:
+    path: "{{ grafana_apt_keyring | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+# The key is published armored; ennemi-brain already holds this very file, in
+# the same armored form, from the hand install, so the download is a no-op there.
+- name: Install Grafana Labs' signing key
+  ansible.builtin.get_url:
+    url: "{{ grafana_apt_key_url }}"
+    dest: "{{ grafana_apt_keyring }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Configure Grafana Labs' apt repository
+  ansible.builtin.deb822_repository:
+    name: grafana
+    types: [deb]
+    uris: "{{ grafana_apt_uri }}"
+    suites: ["{{ grafana_apt_suite }}"]
+    components: ["{{ grafana_apt_component }}"]
+    architectures: ["{{ grafana_apt_dpkg_arch.stdout }}"]
+    signed_by: "{{ grafana_apt_keyring }}"
+    enabled: true
+    state: present
+  become: true
+  notify: Update the apt cache
+
+- name: Remove the disabled one-line sources file it replaces
+  ansible.builtin.file:
+    path: "{{ grafana_apt_legacy_list }}"
+    state: absent
+  become: true
+
+# Now rather than at the end of the play: the roles that depend on this one
+# install from the repository right after it.
+- name: Refresh the apt cache if the repository changed
+  ansible.builtin.meta: flush_handlers

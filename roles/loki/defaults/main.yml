@@ -1,0 +1,26 @@
+---
+# Loki, the log store beside Prometheus: one process (single-binary mode),
+# everything on the local filesystem, reachable from this host only. Fed by
+# Alloy (roles/alloy) and read by Grafana. Installed from Grafana Labs' apt
+# repository (roles/grafana_apt), not the Ubuntu archive's years-old 2.4.
+loki_package: loki
+loki_service: loki
+loki_config_file: /etc/loki/config.yml
+# The package creates the account with nogroup as its primary group.
+loki_user: loki
+loki_group: nogroup
+loki_data_dir: /var/lib/loki
+
+loki_listen_address: 127.0.0.1
+loki_http_port: 3100
+loki_grpc_port: 9096
+loki_log_level: warn
+
+# How long lines are kept. Two tests a month apart must both still be there.
+loki_retention_period: 720h
+# A full room joining at once: the APs and the gateway together log a few
+# thousand lines a minute, well under this, but a join storm is bursty.
+loki_ingestion_rate_mb: 10
+loki_ingestion_burst_size_mb: 20
+# The date the tsdb schema starts: any day before the first line.
+loki_schema_from: "2026-11-01"

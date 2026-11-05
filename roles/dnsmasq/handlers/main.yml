@@ -1,0 +1,14 @@
+---
+# dnsmasq has no reload for its options: a change is a restart, and a few
+# seconds without answers for the phones. Never during a show.
+- name: Restart dnsmasq
+  ansible.builtin.systemd_service:
+    name: "{{ dnsmasq_service }}"
+    state: restarted
+  become: true
+
+- name: Restart the dnsmasq exporter
+  ansible.builtin.systemd_service:
+    name: "{{ dnsmasq_exporter_service }}"
+    state: restarted
+  become: true

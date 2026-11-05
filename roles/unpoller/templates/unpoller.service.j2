@@ -1,0 +1,34 @@
+# Managed by the ennemi infrastructure (roles/unpoller).
+[Unit]
+Description=UniFi Poller (Prometheus exporter and Loki forwarder for the UniFi console)
+Documentation=https://unpoller.com/docs
+After=network-online.target loki.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ unpoller_user }}
+Group={{ unpoller_group }}
+ExecStart={{ unpoller_binary }} --config {{ unpoller_config_file }}
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier={{ unpoller_service }}
+
+# Security hardening: it reads its config and talks to the network, nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

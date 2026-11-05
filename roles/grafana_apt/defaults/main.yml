@@ -1,0 +1,14 @@
+---
+# Grafana Labs' apt repository, which carries grafana, loki and alloy. Shared
+# by the three roles that install from it (meta dependencies), so the
+# repository is described once and the package itself stays with its role.
+grafana_apt_key_url: https://apt.grafana.com/gpg.key
+grafana_apt_keyring: /etc/apt/keyrings/grafana.gpg
+grafana_apt_uri: https://apt.grafana.com
+grafana_apt_suite: stable
+grafana_apt_component: main
+
+# The one-line sources file the same repository left behind, disabled, from an
+# earlier hand install on ennemi-brain. Superseded by the deb822 entry below
+# and removed so apt has a single description of the repository.
+grafana_apt_legacy_list: /etc/apt/sources.list.d/grafana.list.disabled

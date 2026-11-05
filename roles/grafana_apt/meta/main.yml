@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: grafana_apt
+  author: nico
+  description: Grafana Labs' apt repository (grafana, loki, alloy), described once for the roles that install from it.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

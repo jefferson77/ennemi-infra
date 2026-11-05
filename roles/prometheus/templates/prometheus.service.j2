@@ -1,0 +1,44 @@
+[Unit]
+Description=Prometheus Time Series Database
+Documentation=https://prometheus.io/docs/
+After=network.target node_exporter.service nginx_exporter.service
+Wants=node_exporter.service nginx_exporter.service
+
+[Service]
+Type=simple
+User={{ prometheus_user }}
+Group={{ prometheus_group }}
+
+ExecStart={{ prometheus_binary }} \
+    --config.file={{ prometheus_config_file }} \
+    --storage.tsdb.path={{ prometheus_data_dir }} \
+    --storage.tsdb.retention.time={{ prometheus_retention_time }} \
+    --web.listen-address={{ prometheus_listen_address }} \
+    --web.external-url={{ prometheus_external_url }} \
+    --web.route-prefix={{ prometheus_route_prefix }} \
+    --web.console.templates={{ prometheus_install_dir }}/consoles \
+    --web.console.libraries={{ prometheus_install_dir }}/console_libraries
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=32768
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier={{ prometheus_service }}
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ prometheus_data_dir | dirname }}
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,54 @@
+# Managed by the ennemi infrastructure (roles/unpoller). Holds the console
+# password: root and the service account only.
+[poller]
+  debug = false
+  quiet = true
+  plugins = []
+
+[prometheus]
+  disable = false
+  http_listen = "{{ unpoller_prometheus_listen }}"
+  report_errors = false
+  dead_ports = false
+
+[influxdb]
+  disable = true
+
+[loki]
+  disable = false
+  url = "{{ unpoller_loki_url }}"
+  verify_ssl = false
+  interval = "{{ unpoller_loki_interval }}"
+  timeout = "10s"
+
+[datadog]
+  enable = false
+
+[webserver]
+  enable = false
+
+[unifi]
+  dynamic = false
+
+[unifi.defaults]
+  url = "{{ unpoller_unifi_url }}"
+  user = "{{ unpoller_unifi_user }}"
+  pass = "{{ unpoller_unifi_password }}"
+  sites = {{ unpoller_unifi_sites | to_json }}
+  save_sites = true
+  hash_pii = false
+  save_ids = false
+  save_events = true
+  save_syslog = false
+  save_alarms = true
+  save_anomalies = true
+  save_protect_logs = false
+  protect_thumbnails = false
+  save_protect_devices = false
+  disable_network = false
+  save_dpi = false
+  save_rogue = true
+  save_speedtest = false
+  skip_device_tags = false
+  verify_ssl = {{ unpoller_unifi_verify_ssl | bool | to_json }}
+  timeout = "{{ unpoller_unifi_timeout }}"

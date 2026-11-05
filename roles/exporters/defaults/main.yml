@@ -1,0 +1,30 @@
+---
+# The Prometheus exporters that already run on ennemi-brain from upstream
+# release binaries under /opt, each as a unit of its own run by the
+# prometheus account: node_exporter (the host) and nginx_exporter
+# (stub_status). Both pinned to the version found there, so adopting them
+# changes nothing; empty means the latest GitHub release.
+exporters_user: prometheus
+exporters_group: prometheus
+
+exporters_node_version: "1.8.2"
+exporters_node_releases_url: https://github.com/prometheus/node_exporter/releases
+exporters_node_arch: "{{ 'linux-arm64' if ansible_facts['architecture'] == 'aarch64' else 'linux-amd64' }}"
+exporters_node_install_dir: /opt/node_exporter
+exporters_node_binary: "{{ exporters_node_install_dir }}/node_exporter"
+exporters_node_service: node_exporter
+exporters_node_listen_address: 127.0.0.1:9100
+# Where a script can drop metrics of its own (one .prom file each), such as a
+# DHCP lease gauge read from the UniFi API (phase 2 of the observability plan).
+exporters_node_textfile_dir: /var/lib/node_exporter/textfile
+
+exporters_nginx_version: "1.3.0"
+exporters_nginx_releases_url: https://github.com/nginxinc/nginx-prometheus-exporter/releases
+exporters_nginx_arch: "{{ 'linux_arm64' if ansible_facts['architecture'] == 'aarch64' else 'linux_amd64' }}"
+exporters_nginx_install_dir: /opt/nginx_exporter
+# The tarball's binary is nginx-prometheus-exporter; the hand install kept it
+# under the shorter name the unit runs, beside a copy under its own.
+exporters_nginx_binary: "{{ exporters_nginx_install_dir }}/nginx_exporter"
+exporters_nginx_service: nginx_exporter
+exporters_nginx_listen_address: 127.0.0.1:9113
+exporters_nginx_scrape_uri: http://127.0.0.1:8080/stub_status

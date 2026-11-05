@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: unpoller
+  author: nico
+  description: unpoller, the UniFi console's Prometheus exporter and Loki forwarder, from the upstream release tarball.
+  license: proprietary
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

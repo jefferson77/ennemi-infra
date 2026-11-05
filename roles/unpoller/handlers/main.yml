@@ -1,0 +1,6 @@
+---
+- name: Restart unpoller
+  ansible.builtin.systemd_service:
+    name: "{{ unpoller_service }}"
+    state: restarted
+  become: true

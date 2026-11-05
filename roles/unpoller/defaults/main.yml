@@ -1,0 +1,38 @@
+---
+# unpoller polls the UniFi Network application on the venue gateway and
+# exposes what it knows -- every AP's radios and VAPs, the switch's ports, the
+# gateway itself, the neighbouring networks -- as Prometheus metrics, and
+# forwards the controller's own events (a client joining, roaming, leaving;
+# alarms; anomalies) to Loki. From the upstream release tarball, as a systemd
+# service of its own.
+unpoller_version: ""   # empty: the latest GitHub release
+unpoller_releases_url: https://github.com/unpoller/unpoller/releases
+unpoller_arch: "{{ 'linux_arm64' if ansible_facts['architecture'] == 'aarch64' else 'linux_amd64' }}"
+unpoller_install_dir: /opt/unpoller
+unpoller_binary: "{{ unpoller_install_dir }}/unpoller"
+unpoller_staging_dir: "/var/tmp/unpoller-{{ unpoller_target_version | default('unset') }}"
+
+unpoller_user: unpoller
+unpoller_group: unpoller
+unpoller_service: unpoller
+unpoller_unit_file: "/etc/systemd/system/{{ unpoller_service }}.service"
+unpoller_config_dir: /etc/unpoller
+unpoller_config_file: "{{ unpoller_config_dir }}/up.conf"
+
+# The console, by the address this host reaches it at; a bare https origin,
+# no port, no path, as UniFi OS wants it. The account is a local one on the
+# console (a UI/SSO account cannot log in through the API): a read-only
+# viewer is enough and is what it should be. Both from .env, through
+# inventory/group_vars/all.yml.
+unpoller_unifi_url: https://192.168.108.1
+unpoller_unifi_user: ""
+unpoller_unifi_password: ""
+unpoller_unifi_sites: ["default"]
+unpoller_unifi_verify_ssl: false
+unpoller_unifi_timeout: 60s
+
+unpoller_prometheus_listen: 127.0.0.1:9130
+# Events to Loki: client connections, roams and disconnections as the
+# controller logs them, with client names and addresses in the line.
+unpoller_loki_url: http://127.0.0.1:3100
+unpoller_loki_interval: 2m
