@@ -20,11 +20,14 @@ unpoller_config_dir: /etc/unpoller
 unpoller_config_file: "{{ unpoller_config_dir }}/up.conf"
 
 # The console, by the address this host reaches it at; a bare https origin,
-# no port, no path, as UniFi OS wants it. The account is a local one on the
-# console (a UI/SSO account cannot log in through the API): a read-only
-# viewer is enough and is what it should be. Both from .env, through
+# no port, no path, as UniFi OS wants it. Authentication is an API key made
+# on the console (Settings -> Control Plane -> Integrations, or an admin's own
+# API keys): it carries the rights of the admin it was made from, so one from
+# a view-only local admin keeps unpoller read-only. A local account's user and
+# password work too, when no key is set. All from .env, through
 # inventory/group_vars/all.yml.
 unpoller_unifi_url: https://192.168.108.1
+unpoller_unifi_api_key: ""
 unpoller_unifi_user: ""
 unpoller_unifi_password: ""
 unpoller_unifi_sites: ["default"]

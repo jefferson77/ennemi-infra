@@ -72,9 +72,14 @@ grafana_admin_password: >-
             type='properties', file=ennemi_env_file, errors='ignore')
      | default('', true) }}
 
-# The local, read-only account unpoller logs in to the UniFi console with
-# (roles/unpoller). Required on the monitoring host: the role refuses to run
-# without both.
+# How unpoller reaches the UniFi console (roles/unpoller): an API key made on
+# the console, or failing that a local account. Required on the monitoring
+# host: the role refuses to run with neither.
+unpoller_unifi_api_key: >-
+  {{ lookup('ansible.builtin.ini', 'UNPOLLER_API_KEY',
+            type='properties', file=ennemi_env_file, errors='ignore')
+     | default('', true) }}
+
 unpoller_unifi_user: >-
   {{ lookup('ansible.builtin.ini', 'UNPOLLER_USER',
             type='properties', file=ennemi_env_file, errors='ignore')

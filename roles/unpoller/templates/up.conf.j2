@@ -32,8 +32,12 @@
 
 [unifi.defaults]
   url = "{{ unpoller_unifi_url }}"
+{% if unpoller_unifi_api_key | length > 0 %}
+  api_key = "{{ unpoller_unifi_api_key }}"
+{% else %}
   user = "{{ unpoller_unifi_user }}"
   pass = "{{ unpoller_unifi_password }}"
+{% endif %}
   sites = {{ unpoller_unifi_sites | to_json }}
   save_sites = true
   hash_pii = false

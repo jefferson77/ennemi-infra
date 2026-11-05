@@ -129,7 +129,7 @@ cp .env.example .env      # then fill in the real values
 | `WEBAPP_SESSION_PASSWORD` | the show app's Control login cookie (`ennemi_webapp`, required, ≥ 32 characters) |
 | `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY` | DNS-01 through OVH's API (`certbot`, required for a `method: dns-ovh` certificate) — see [DNS-01 through OVH](#dns-01-through-ovh-method-dns-ovh) |
 | `GRAFANA_ADMIN_PASSWORD` | Grafana's admin account on `ennemi-brain` (`grafana`, required there; read by Grafana only when it first creates its database) |
-| `UNPOLLER_USER`, `UNPOLLER_PASSWORD` | the local, read-only UniFi console account unpoller polls with (`unpoller`, required on `ennemi-brain`) |
+| `UNPOLLER_API_KEY` | the UniFi console API key unpoller polls with (`unpoller`, required on `ennemi-brain`; `UNPOLLER_USER` and `UNPOLLER_PASSWORD`, a local account, work instead) |
 
 `inventory/group_vars/all.yml` is the only place that reads the file, with an
 `ini` lookup in `properties` mode, and the path is derived from the inventory

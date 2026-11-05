@@ -1,13 +1,14 @@
 ---
-- name: Fail early without a console account
+- name: Fail early without a way into the console
   ansible.builtin.assert:
-    that:
-      - unpoller_unifi_user | length > 0
-      - unpoller_unifi_password | length > 0
+    that: >-
+      unpoller_unifi_api_key | length > 0
+      or (unpoller_unifi_user | length > 0 and unpoller_unifi_password | length > 0)
     fail_msg: >-
-      UNPOLLER_USER / UNPOLLER_PASSWORD in .env are missing. unpoller logs in
-      to the UniFi console with a local, read-only account: create one there
-      (Settings -> Admins & Users), put it in .env, and run again.
+      Neither UNPOLLER_API_KEY nor UNPOLLER_USER / UNPOLLER_PASSWORD is set in
+      .env. unpoller reaches the UniFi console with an API key made there
+      (Settings -> Control Plane -> Integrations), or with a local account:
+      put one of the two in .env and run again.
     quiet: true
 
 - name: Resolve the latest unpoller release
@@ -201,6 +202,7 @@
     msg: >-
       {{ inventory_hostname }}: unpoller
       {{ unpoller_installed_version | default('', true) | ternary(unpoller_installed_version, unpoller_target_version) }}
-      on {{ unpoller_prometheus_listen }}, polling {{ unpoller_unifi_url }} as {{ unpoller_unifi_user }}:
+      on {{ unpoller_prometheus_listen }}, polling {{ unpoller_unifi_url }}
+      {{ 'with an API key' if unpoller_unifi_api_key | length > 0 else 'as ' ~ unpoller_unifi_user }}:
       {{ unpoller_check.content | regex_findall('unpoller_device_info\{') | length }} devices.
   when: unpoller_check is not skipped
