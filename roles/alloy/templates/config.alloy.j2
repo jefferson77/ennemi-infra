@@ -135,7 +135,7 @@ loki.process "unifi" {
     }
     stage.template {
       source   = "dhcp_op"
-      template = "{% raw %}{{ if .dhcp_noaddr }}NOADDRESS{{ else }}{{ .dhcp_op }}{{ end }}{% endraw %}"
+      template = "{% raw %}{{ if .dhcp_noaddr }}NOADDRESS{{ else if .dhcp_op }}{{ .dhcp_op }}{{ end }}{% endraw %}"
     }
     stage.labels {
       values = {
