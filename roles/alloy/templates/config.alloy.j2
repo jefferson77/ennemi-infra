@@ -231,3 +231,20 @@ loki.process "nginx_access" {
   }
   forward_to = [loki.write.local.receiver]
 }
+
+// ---------------------------------------------------------------------------
+// dnsmasq's query log, when roles/dnsmasq turns it on: every dnsmasq line
+// then lands there rather than in the journal.
+// ---------------------------------------------------------------------------
+local.file_match "dnsmasq" {
+  path_targets = [{
+    __path__ = "{{ alloy_dnsmasq_log_glob }}",
+    job      = "dnsmasq-queries",
+    unit     = "dnsmasq",
+  }]
+}
+
+loki.source.file "dnsmasq" {
+  targets    = local.file_match.dnsmasq.targets
+  forward_to = [loki.write.local.receiver]
+}

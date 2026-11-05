@@ -41,3 +41,7 @@ alloy_journal_units:
   - grafana-server
 
 alloy_nginx_access_log: /var/log/nginx/access.json.log
+
+# dnsmasq's query log (roles/dnsmasq, dnsmasq_log_queries): the same `unit`
+# label as its journal stream, so one selector reads both.
+alloy_dnsmasq_log_glob: /var/log/dnsmasq/*.log

@@ -17,13 +17,20 @@ dnsmasq_all_servers: true
 dnsmasq_cache_size: 10000
 dnsmasq_forward_max: 2000
 
-# A line per query in the journal (`log-queries=extra`: with the source
-# address and the query's id, so an answer can be matched to its question).
-# For a load test only: a full room asks hundreds of questions a second, and
-# dnsmasq logs synchronously unless log-async is set, which this turns on too.
-# Takes a restart, so flip it hours before doors open.
+# A line per query (`log-queries=extra`: with the source address and the
+# query's id, so an answer can be matched to its question), in a file of its
+# own rather than the journal, read into Loki by roles/alloy. For the load
+# tests: a full room asks hundreds of questions a second, and dnsmasq logs
+# synchronously unless log-async is set, which this turns on too. Every other
+# dnsmasq line goes to that file as well while this is on. Takes a restart,
+# so flip it hours before doors open. Rotated daily by logrotate.
 dnsmasq_log_queries: false
-dnsmasq_log_async: 50
+dnsmasq_log_dir: /var/log/dnsmasq
+dnsmasq_log_file: "{{ dnsmasq_log_dir }}/queries.log"
+dnsmasq_log_async: 100
+dnsmasq_log_rotate_days: 14
+# The account that tails the log into Loki (roles/alloy).
+dnsmasq_log_reader: alloy
 
 # The exporter reading dnsmasq's cache statistics (the CHAOS TXT records
 # hits.bind, misses.bind, servers.bind, ...) over DNS, from the Ubuntu archive

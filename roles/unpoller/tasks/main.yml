@@ -52,7 +52,7 @@
   register: unpoller_binary_stat
   become: true
 
-# `unpoller -v` prints "unpoller v5.9.4", on stdout or stderr.
+# `unpoller -v` prints "unpoller, version 5.9.4 (branch: ...)", on stdout or stderr.
 - name: Read the installed version
   ansible.builtin.command: "{{ unpoller_binary }} -v"
   register: unpoller_version_output
@@ -65,7 +65,7 @@
   ansible.builtin.set_fact:
     unpoller_installed_version: >-
       {{ ((unpoller_version_output.stdout | default('')) ~ (unpoller_version_output.stderr | default('')))
-         | regex_search('v([0-9]+\.[0-9]+\.[0-9]+)', '\1') | default([''], true) | first }}
+         | regex_search('version v?([0-9]+\.[0-9]+\.[0-9]+)', '\1') | default([''], true) | first }}
 
 - name: Report the unpoller install this run would perform
   ansible.builtin.debug:

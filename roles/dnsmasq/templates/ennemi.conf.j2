@@ -31,7 +31,8 @@ all-servers
 {% endif %}
 {% if dnsmasq_log_queries %}
 
-# A line per query, for a load test (roles/dnsmasq, dnsmasq_log_queries).
+# Log every query to its own file (added 2026-11-05 for the load tests). Asynchronous so bursts never wait on disk.
 log-queries=extra
+log-facility={{ dnsmasq_log_file }}
 log-async={{ dnsmasq_log_async }}
 {% endif %}

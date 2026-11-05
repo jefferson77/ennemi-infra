@@ -11,6 +11,70 @@
     DEBIAN_FRONTEND: noninteractive
   register: dnsmasq_install
 
+# The query log's directory and its rotation, as they were set up by hand on
+# ennemi-brain on 2026-11-05 (hence the ownership, and no header in the
+# logrotate file). dnsmasq creates the file itself, readable by its own
+# account and root only; Alloy reads it through an ACL rather than a looser
+# mode, on the directory for the files to come and on the file that is there.
+- name: Create the log directory
+  ansible.builtin.file:
+    path: "{{ dnsmasq_log_dir }}"
+    state: directory
+    owner: dnsmasq
+    group: nogroup
+    mode: "0755"
+  become: true
+
+- name: Let Alloy read the query log
+  ansible.posix.acl:
+    path: "{{ dnsmasq_log_dir }}"
+    entity: "{{ dnsmasq_log_reader }}"
+    etype: user
+    permissions: r
+    default: "{{ item }}"
+    state: present
+  become: true
+  loop: [true, false]
+  loop_control:
+    label: "{{ 'default' if item else 'directory' }}"
+
+- name: Look for the query log
+  ansible.builtin.stat:
+    path: "{{ dnsmasq_log_file }}"
+  register: dnsmasq_log_stat
+  become: true
+
+- name: Let Alloy read the query log that is already there
+  ansible.posix.acl:
+    path: "{{ dnsmasq_log_file }}"
+    entity: "{{ dnsmasq_log_reader }}"
+    etype: user
+    permissions: r
+    state: present
+  become: true
+  when: dnsmasq_log_stat.stat.exists
+
+- name: Rotate the query log
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/dnsmasq-queries
+    content: |
+      {{ dnsmasq_log_file }} {
+          daily
+          rotate {{ dnsmasq_log_rotate_days }}
+          missingok
+          notifempty
+          compress
+          delaycompress
+          create 0640 dnsmasq adm
+          postrotate
+              /usr/bin/systemctl kill -s USR2 {{ dnsmasq_service }}.service >/dev/null 2>&1 || true
+          endscript
+      }
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
 # Deliberately no "managed by ansible" header: the template renders the file
 # ennemi-brain already has, comments included, so adopting it is a no-op.
 - name: Deploy the resolver configuration

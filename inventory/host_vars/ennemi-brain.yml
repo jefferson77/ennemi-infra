@@ -74,3 +74,7 @@ prometheus_extra_scrape_configs:
     static_configs:
       - targets: ["127.0.0.1:12345"]
         labels: {instance: ennemi, service: alloy}
+
+# The resolver logs every query to /var/log/dnsmasq/queries.log (roles/dnsmasq),
+# as set up by hand on 2026-11-05 for the load tests; off again after them.
+dnsmasq_log_queries: true

@@ -535,3 +535,13 @@ Still to do for phase 1:
 2. Walk through every panel with a few phones joining; confirm the `ip_delta` units; check the
    switch appears once it has something to say.
 3. Commit both repositories.
+
+Later still (after the commits): the resolver's query log had been turned on **by hand on the
+host** at 16:41 UTC (`log-queries=extra`, `log-facility=/var/log/dnsmasq/queries.log`,
+`log-async=100`, a logrotate entry), and the first deploy of the dnsmasq role from the commit
+overwrote it. The role now renders that block (`dnsmasq_log_queries: true` in brain's
+host_vars, off again after the tests), owns the logrotate entry as found, and gives Alloy read
+access through an ACL; Alloy tails the file into Loki under `unit="dnsmasq"`, the same label
+as the journal stream, so the dashboard's dnsmasq panels read both. unpoller's version check
+also mis-read its output and reinstalled on every run; fixed. Every role now reports no
+change on a second run.
