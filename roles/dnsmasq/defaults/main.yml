@@ -29,8 +29,6 @@ dnsmasq_log_dir: /var/log/dnsmasq
 dnsmasq_log_file: "{{ dnsmasq_log_dir }}/queries.log"
 dnsmasq_log_async: 100
 dnsmasq_log_rotate_days: 14
-# The account that tails the log into Loki (roles/alloy).
-dnsmasq_log_reader: alloy
 
 # The exporter reading dnsmasq's cache statistics (the CHAOS TXT records
 # hits.bind, misses.bind, servers.bind, ...) over DNS, from the Ubuntu archive
