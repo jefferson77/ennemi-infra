@@ -75,6 +75,8 @@ prometheus_extra_scrape_configs:
       - targets: ["127.0.0.1:12345"]
         labels: {instance: ennemi, service: alloy}
 
-# The resolver logs every query to /var/log/dnsmasq/queries.log (roles/dnsmasq),
-# as set up by hand on 2026-11-05 for the load tests; off again after them.
+# The resolver logs every query to /var/log/dnsmasq/queries.log (roles/dnsmasq).
+# Set up by hand on 2026-11-05 for the load tests, and kept on for every show
+# since: the webapp's « Charger le cache » (Télécommande) reads it to learn the
+# names the phones ask, which « Préchauffer le DNS » asks again before doors open.
 dnsmasq_log_queries: true

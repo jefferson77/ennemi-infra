@@ -10,12 +10,29 @@ dnsmasq_service: dnsmasq
 dnsmasq_listen_address: 192.168.108.2
 dnsmasq_local_domain: ennemi.net
 dnsmasq_local_address: "{{ dnsmasq_listen_address }}"
+# Public resolvers, asked one at a time (no all-servers): with it every query
+# went out twice, and Quad9 refused 116 of them on 2026-11-05.
 dnsmasq_upstreams:
   - 1.1.1.1
-  - 9.9.9.9
-dnsmasq_all_servers: true
-dnsmasq_cache_size: 10000
+  - 8.8.8.8
+dnsmasq_all_servers: false
+# A show's phones produce ~20k distinct answers (2026-11-05); 10k evicted.
+dnsmasq_cache_size: 50000
 dnsmasq_forward_max: 2000
+# Keep every learned answer an hour (dnsmasq's maximum), whatever its TTL
+# says: the webapp's « Préchauffer le DNS » asks every name a quarter of an
+# hour before doors open, and the cache must still hold them through the
+# join wave, when the uplink is full and forwarded answers are lost.
+dnsmasq_min_cache_ttl: 3600
+# Cache these record types too (dnsmasq caches only A, AAAA, CNAME and SRV
+# by itself): iPhones ask an HTTPS record beside every address, 41 % of the
+# load on 2026-11-05, and every one of them was forwarded. Cached, and warmed
+# by the webapp like the addresses, they are answered here for an hour.
+# (filter-rr was tried first: it still forwards the query, and only strips
+# the answer.)
+dnsmasq_cache_rr:
+  - HTTPS
+  - SVCB
 
 # A line per query (`log-queries=extra`: with the source address and the
 # query's id, so an answer can be matched to its question), in a file of its

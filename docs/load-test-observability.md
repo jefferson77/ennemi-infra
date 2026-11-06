@@ -281,9 +281,19 @@ existing install is a no-op.
 Today the file is hand-edited (it was changed on 2026-11-05 for the upstreams, cache size and
 `dns-forward-max`). The role templates it from variables (`listen-address`, the `ennemi.net`
 override, upstreams, `cache-size`, `dns-forward-max`) and adds two test switches:
-`dnsmasq_log_queries` (off by default; `log-queries=extra` for a test night) and `log-async=50`
+`dnsmasq_log_queries` (off by default; `log-queries=extra` for a test night) and `log-async=100`
 so logging never blocks answers. `dnsmasq --test` as `validate:`. Restart, not reload: dnsmasq
 has no reload; schedule the restart hours before doors open.
+
+After test 2 (2026-11-06) the role also carries what the cache needs to survive the join wave:
+`min-cache-ttl=3600` (every answer kept an hour), `cache-rr=HTTPS,SVCB` (the iPhones' HTTPS
+queries, 41 % of the load, cached like addresses; `filter-rr` was tried first and still forwards
+every query, only stripping the answer), `cache-size=50000`, upstreams 1.1.1.1 and 8.8.8.8 asked
+in turn (no `all-servers`; Quad9 refused queries). The query log stays on for
+every show: the webapp's « Cache DNS » card (its `specs/dns-warmup.md`) reads it with « Charger
+le cache », and « Préchauffer le DNS » asks the resolver every stored name a quarter of an hour
+before doors open. **A dnsmasq restart empties the cache**, so a deploy of this role before a
+show must be followed by a warmup from the Télécommande.
 
 ### Role `nginx` (existing): two additions
 
@@ -464,12 +474,15 @@ with thresholds taken from the test.
   in Loki in the last hour, the dashboard loaded on the laptop that stays at the desk.
 - T−3 h: `dnsmasq_log_queries: true` deployed (one dnsmasq restart, a few seconds of DNS).
   APs powered for more than 2 minutes (DFS check) — already in the channel plan's notes.
+- T−15 min: on the Télécommande, « Préchauffer le DNS » (about 3 minutes); after any dnsmasq
+  restart since, again. « Charger le cache » first if the log grew since the last load.
 - T−30 min: Grafana window set to "last 30 min", refresh 10 s; note the time; add the
   "doors open" annotation when they do.
 - During: watch the funnel row; when a tile goes red, the row below it says which device.
 - After: set the dashboard to the test's time range and take the panel exports;
   `uv run ennemi-collect` in the `ennemi` repo for the APs' flash logs (the UK Ultra's are RAM
-  only, and are now also in Loki); `dnsmasq_log_queries` back to false.
+  only, and are now also in Loki); « Charger le cache » on the Télécommande, so the names
+  the phones asked are stored for the next warmup. The query log stays on.
 
 ## 10. Open points
 
@@ -540,8 +553,8 @@ Later still (after the commits): the resolver's query log had been turned on **b
 host** at 16:41 UTC (`log-queries=extra`, `log-facility=/var/log/dnsmasq/queries.log`,
 `log-async=100`, a logrotate entry), and the first deploy of the dnsmasq role from the commit
 overwrote it. The role now renders that block (`dnsmasq_log_queries: true` in brain's
-host_vars, off again after the tests), owns the logrotate entry as found, and gives Alloy read
-access through an ACL; Alloy tails the file into Loki under `unit="dnsmasq"`, the same label
+host_vars, kept on since: the webapp reads it), owns the logrotate entry as found, and gives
+Alloy read access through the `adm` group; Alloy tails the file into Loki under `unit="dnsmasq"`, the same label
 as the journal stream, so the dashboard's dnsmasq panels read both. unpoller's version check
 also mis-read its output and reinstalled on every run; fixed. Every role now reports no
 change on a second run.

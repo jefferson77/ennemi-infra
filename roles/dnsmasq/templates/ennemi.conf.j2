@@ -11,7 +11,7 @@ address=/{{ dnsmasq_local_domain }}/{{ dnsmasq_local_address }}
 # Answer every record type for the zone here; never forward ennemi.net upstream.
 local=/{{ dnsmasq_local_domain }}/
 
-# Upstream: the router (current DHCP-provided resolver). Ignore /etc/resolv.conf.
+# Upstream: public resolvers, asked in turn. Ignore /etc/resolv.conf.
 no-resolv
 {% for upstream in dnsmasq_upstreams %}
 server={{ upstream }}
@@ -24,6 +24,14 @@ dns-loop-detect
 
 cache-size={{ dnsmasq_cache_size }}
 dns-forward-max={{ dnsmasq_forward_max }}
+{% if dnsmasq_min_cache_ttl %}
+# Keep every answer at least this long, so a warmed cache outlives the join wave (added 2026-11-06).
+min-cache-ttl={{ dnsmasq_min_cache_ttl }}
+{% endif %}
+{% if dnsmasq_cache_rr %}
+# Cache these record types as well as addresses: the phones' HTTPS queries, once warmed, never reach upstream (added 2026-11-06).
+cache-rr={{ dnsmasq_cache_rr | join(',') }}
+{% endif %}
 {% if dnsmasq_all_servers %}
 
 # Query every upstream at once and use the first answer (added 2026-11-05).
